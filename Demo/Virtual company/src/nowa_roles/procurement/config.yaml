@@ -1,5 +1,8 @@
 role_id: procurement
 display_name: Procurement Manager
+event_classifier: nowa_roles.procurement.event_classifier:classify_procurement_events
+token_rules:
+  generic_tokens: false
 mcp_capabilities:
 - &id003
   tool_id: mcp__drivemcp__get_stock_levels
@@ -158,6 +161,16 @@ mcp_capabilities:
         description: Максимальное количество SKU в ответе
         default: 200
 affective_mapping:
+  stock_ok:
+    valence: 0.2
+    arousal: 0.2
+    tags:
+    - procurement
+  stock_low_covered:
+    valence: -0.1
+    arousal: 0.3
+    tags:
+    - procurement
   stock_critical_low:
     valence: -0.7
     arousal: 0.8
@@ -554,7 +567,19 @@ action_vocabulary:
     display_name: Mcp  drivemcp  create purchase order
     description: ''
 field_aliases: {}
-param_bindings: {}
+param_bindings:
+  sku:
+    path: entities.items.0.id
+    strict: true
+  product_id:
+    path: entities.items.0.id
+    strict: true
+  qty:
+    path: entities.items.0.suggested_qty
+    strict: true
+  supplier_id:
+    path: entities.items.0.default_supplier_id
+    strict: true
 seed_corpus:
 - context_tokens:
   - event:stock_critical_low
@@ -569,71 +594,97 @@ seed_corpus:
   intensity: 0.8
   reinforce: true
 - context_tokens:
+  - event:stock_low_covered
+  - valence:neutral
+  - domain:procurement
+  action: wait_and_monitor
+  consequence: order_already_inbound
+  reward: 0.6
+  intensity: 0.7
+  reinforce: true
+- context_tokens:
+  - event:stock_ok
+  - valence:positive
+  - domain:procurement
+  action: wait_and_monitor
+  consequence: no_action_needed
+  reward: 0.5
+  intensity: 0.6
+  reinforce: true
+- context_tokens:
+  - event:budget_exceeded
+  - valence:very_negative
+  - arousal:high
+  - domain:finance
+  - domain:risk
+  action: wait_and_monitor
+  consequence: budget_protected
+  reward: 0.7
+  intensity: 0.8
+  reinforce: true
+- context_tokens:
   - event:stock_critical_low
   - valence:very_negative
   - arousal:high
   - domain:procurement
   - domain:urgency
   - domain:risk
-  action: mcp__drivemcp__create_purchase_order
-  consequence: budget_preserved
+  - event:budget_exceeded
+  - domain:finance
+  action: wait_and_monitor
+  consequence: escalated_to_finance
   reward: 0.6
-  intensity: 0.6
-  reinforce: false
+  intensity: 0.8
+  reinforce: true
 - context_tokens:
+  - event:stock_critical_low
+  - valence:very_negative
+  - arousal:high
+  - domain:procurement
+  - domain:urgency
+  - domain:risk
   - event:supplier_defaulted
   - valence:negative
-  - arousal:medium
-  - domain:procurement
-  - domain:risk
   action: mcp__drivemcp__create_purchase_order
   consequence: risk_reduced
   reward: 0.7
   intensity: 0.7
   reinforce: true
 - context_tokens:
-  - event:Заказ пришел вовремя
-  - valence:very_positive
-  - arousal:medium
-  action: mcp__drivemcp__create_purchase_order
-  consequence: reliable_delivery
-  reward: 0.7
-  intensity: 0.7
-  reinforce: false
-- context_tokens:
-  - event:quiet_day
-  - domain:neutral
-  - valence:neutral
+  - event:stock_ok
+  - valence:positive
+  - domain:procurement
+  - event:supplier_defaulted
+  - valence:negative
+  - domain:risk
   action: wait_and_monitor
   consequence: no_action_needed
-  reward: 0.1
-  intensity: 0.2
-  reinforce: false
-- context_tokens:
-  - event:demand_shock
-  - domain:procurement
-  - arousal:high
-  - valence:negative
-  action: mcp__drivemcp__create_purchase_order
-  consequence: demand_met
-  reward: 0.75
-  intensity: 0.85
-  reinforce: true
-- context_tokens:
-  - budget:high_utilization
-  - domain:finance
-  - valence:negative
-  action: wait_and_monitor
-  consequence: budget_protected
   reward: 0.4
   intensity: 0.6
   reinforce: false
 - context_tokens:
-  - event:order_arrived_late
+  - event:stock_low_covered
+  - valence:neutral
+  - domain:procurement
+  - event:supplier_defaulted
+  - valence:negative
   - domain:risk
+  action: wait_and_monitor
+  consequence: order_already_inbound
+  reward: 0.4
+  intensity: 0.6
+  reinforce: false
+- context_tokens:
+  - event:stock_critical_low
+  - valence:very_negative
+  - arousal:high
+  - domain:procurement
+  - domain:urgency
+  - domain:risk
+  - event:order_arrived_late
   - valence:negative
   action: mcp__drivemcp__create_purchase_order
   consequence: supplier_risk_reduced
   reward: 0.6
   intensity: 0.7
-  reinforce: true
+  reinforce: false

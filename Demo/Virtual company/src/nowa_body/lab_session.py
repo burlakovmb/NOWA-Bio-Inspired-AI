@@ -34,6 +34,7 @@ from nowa_body.tool_registry import MCPToolRegistry
 STOCK_TOOL = "mcp__drivemcp__get_stock_levels"
 SUPPLIER_TOOL = "mcp__drivemcp__get_suppliers"
 BUDGET_TOOL = "mcp__drivemcp__get_budget"
+NEEDS_TOOL = "mcp__drivemcp__get_replenishment_needs"
 ORDER_TOOL = "mcp__drivemcp__create_purchase_order"
 
 SCENARIO_QUIET = "quiet"
@@ -313,6 +314,31 @@ def _copy_suppliers(*, defaulted: bool = False) -> Dict[str, dict]:
     }
 
 
+def replenishment_needs(world: LabWorld) -> Dict[str, Any]:
+    """The ERP's own trigger list, as 1C:Drive ``get_replenishment_needs`` returns it.
+
+    Only positions below the reorder point, with a suggested quantity and the
+    first supplier that has not defaulted.
+    """
+    supplier = next(
+        (sid for sid, info in world.suppliers.items() if not info.get("is_defaulted")),
+        next(iter(world.suppliers), ""),
+    )
+    items: Dict[str, dict] = {}
+    for sku, info in world.stock.items():
+        if not info.get("below_reorder_point"):
+            continue
+        reorder_point = float(info.get("reorder_point") or 0.0)
+        quantity = float(info.get("quantity") or 0.0)
+        items[sku] = {
+            "quantity": quantity,
+            "reorder_point": reorder_point,
+            "suggested_qty": max(1.0, 2.0 * reorder_point - quantity),
+            "default_supplier_id": supplier,
+        }
+    return {"status": "ok", "needs_replenishment": bool(items), "items": items}
+
+
 def world_for_scenario(scenario: str, write_status: str = WRITE_ACCEPTED) -> LabWorld:
     name = scenario if scenario in SCENARIOS else SCENARIO_STOCK_CRITICAL
     if name == SCENARIO_QUIET:
@@ -438,6 +464,7 @@ class BodyLabSession:
         self.client.register(MockMCPTool(BUDGET_TOOL, lambda _p: {
             "status": "ok", **self.world.budget,
         }))
+        self.client.register(MockMCPTool(NEEDS_TOOL, lambda _p: replenishment_needs(self.world)))
         self.client.register(MockMCPTool(ORDER_TOOL, self._write_order))
 
         scheduler = SleepScheduler(
@@ -482,6 +509,7 @@ class BodyLabSession:
         stock = self._execute(STOCK_TOOL, {})
         suppliers = self._execute(SUPPLIER_TOOL, {})
         budget = self._execute(BUDGET_TOOL, {})
+        needs = self._execute(NEEDS_TOOL, {})
         return {
             "agent_id": self.settings.agent_id,
             "stock": self.world.stock,
@@ -491,6 +519,7 @@ class BodyLabSession:
                 STOCK_TOOL: stock,
                 SUPPLIER_TOOL: suppliers,
                 BUDGET_TOOL: budget,
+                NEEDS_TOOL: needs,
             },
         }
 

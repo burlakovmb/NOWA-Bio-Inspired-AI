@@ -112,7 +112,7 @@ class TestRoleList:
         item = by_id["procurement"]
         assert item.status == "valid"
         assert item.n_tools == 6
-        assert item.n_lessons == 8
+        assert item.n_lessons == 9
 
     def test_broken_config_is_error_badge(self, tmp_path):
         role_dir = tmp_path / "broken"
@@ -315,6 +315,8 @@ class TestVocabularyAndAffect:
     def test_event_display_name_follows_language(self, tmp_path):
         ctrl = _open_procurement_copy(tmp_path)
         assert ctrl.affective_events() == [
+            "stock_ok",
+            "stock_low_covered",
             "stock_critical_low",
             "supplier_defaulted",
             "deal_closed_favorable",

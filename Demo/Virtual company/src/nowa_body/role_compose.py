@@ -52,6 +52,10 @@ def compose_roles(role_ids: Sequence[str], roles_root: Any) -> RoleConfig:
         if path and path not in classifier_paths:
             classifier_paths.append(path)
 
+    token_rules: Dict[str, Any] = {}
+    for cfg in loaded:
+        token_rules.update(dict(getattr(cfg, "token_rules", None) or {}))
+
     composed = RoleConfig(
         role_id="+".join(ids),
         display_name=" + ".join(cfg.display_name for cfg in loaded),
@@ -66,6 +70,7 @@ def compose_roles(role_ids: Sequence[str], roles_root: Any) -> RoleConfig:
         param_bindings=bindings,
         mcp_servers=servers,
         event_classifier_paths=classifier_paths,
+        token_rules=token_rules,
     )
     validate_role_config(composed)
     return composed

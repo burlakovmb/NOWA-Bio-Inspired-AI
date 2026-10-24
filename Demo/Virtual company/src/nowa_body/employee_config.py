@@ -41,6 +41,9 @@ class EmployeeConfig:
     sleep: SleepConfig = field(default_factory=SleepConfig)
     seed_intuition: bool = True
     auto_execute: bool = False
+    # Hippocampal activation half-life; None keeps the core default (1 h),
+    # which forgets a working day before the nightly sleep can replay it.
+    memory_half_life_s: Optional[float] = None
     schema_version: int = 1
     created_at: str = ""
     updated_at: str = ""
@@ -119,6 +122,11 @@ def employee_config_from_mapping(raw: Any, path: str) -> EmployeeConfig:
         DEFAULT_SENSOR_REFRESH_S,
     )
     sleep = _parse_sleep(raw.get("sleep") or {}, path)
+    half_life_raw = raw.get("memory_half_life_s")
+    memory_half_life = (
+        None if half_life_raw is None
+        else _as_positive_float(half_life_raw, "memory_half_life_s", path, 3600.0)
+    )
     created = str(raw.get("created_at") or "").strip()
     updated = str(raw.get("updated_at") or "").strip()
     try:
@@ -134,6 +142,7 @@ def employee_config_from_mapping(raw: Any, path: str) -> EmployeeConfig:
         sleep=sleep,
         seed_intuition=bool(raw.get("seed_intuition", True)),
         auto_execute=bool(raw.get("auto_execute", False)),
+        memory_half_life_s=memory_half_life,
         schema_version=schema_version,
         created_at=created,
         updated_at=updated,
@@ -188,6 +197,9 @@ def employee_config_to_mapping(config: EmployeeConfig) -> Dict[str, Any]:
         },
         "seed_intuition": bool(config.seed_intuition),
         "auto_execute": bool(config.auto_execute),
+        "memory_half_life_s": (
+            None if config.memory_half_life_s is None else float(config.memory_half_life_s)
+        ),
         "created_at": config.created_at,
         "updated_at": config.updated_at,
     }
@@ -205,6 +217,7 @@ def new_employee_config(
     fatigue_threshold: Optional[float] = DEFAULT_FATIGUE,
     seed_intuition: bool = True,
     auto_execute: bool = False,
+    memory_half_life_s: Optional[float] = None,
 ) -> EmployeeConfig:
     now = datetime.now().isoformat(timespec="seconds")
     mapping = {
@@ -221,6 +234,7 @@ def new_employee_config(
         },
         "seed_intuition": seed_intuition,
         "auto_execute": auto_execute,
+        "memory_half_life_s": memory_half_life_s,
         "created_at": now,
         "updated_at": now,
     }

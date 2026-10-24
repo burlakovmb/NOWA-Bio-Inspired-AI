@@ -2,7 +2,8 @@
 
 Live runtime calls ``encode(world_state)``. ``encode_tool_result`` /
 ``encode_action_outcome`` keep the older host contract.
-Token buckets and outcome vectors come from ``mcp_body.generic_encoder``.
+Token buckets and outcome vectors come from ``mcp_body.generic_encoder``;
+``token_rules.generic_tokens: false`` drops its generic buckets.
 """
 
 from __future__ import annotations
@@ -19,7 +20,32 @@ from mcp_body.mcp_client import tool_name_from_tool_id  # noqa: E402
 
 
 class BusinessEventEncoder(GenericEncoder):
-    """GenericEncoder plus Phase-1 token helpers."""
+    """GenericEncoder plus Phase-1 token helpers and ``token_rules.generic_tokens``."""
+
+    def generic_tokens_enabled(self) -> bool:
+        """``token_rules.generic_tokens: false`` keeps only mapped business events.
+
+        Generic ``tool:/status:/field:/entity:`` tokens let a role work without
+        an event classifier, but once a classifier names the events they only
+        dilute recall: a lesson written as ``event:*`` tokens then matches the
+        live context at a fraction of its real similarity. Impulses are kept.
+        """
+        return bool(self.token_rules.get("generic_tokens", True))
+
+    def _tokens_for_tool(self, tool_id: str, payload: Dict[str, Any]) -> List[str]:
+        if not self.generic_tokens_enabled():
+            return []
+        return super()._tokens_for_tool(tool_id, payload)
+
+    def _field_bucket_tokens(self, world_state: Any) -> List[str]:
+        if not self.generic_tokens_enabled():
+            return []
+        return super()._field_bucket_tokens(world_state)
+
+    def _entity_tokens(self, world_state: Any) -> List[str]:
+        if not self.generic_tokens_enabled():
+            return []
+        return super()._entity_tokens(world_state)
 
     def encode_tool_result(
         self,

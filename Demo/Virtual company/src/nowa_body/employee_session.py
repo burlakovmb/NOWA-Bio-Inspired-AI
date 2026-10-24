@@ -288,6 +288,10 @@ class EmployeeSession:
         elif self.config.seed_intuition:
             build_seeder(composed).seed_agent(agent)
             self.last_start_seeded = True
+        if self.config.memory_half_life_s is not None:
+            hippocampus = getattr(agent, "hippocampus", None)
+            if hippocampus is not None:
+                hippocampus.activation_decay_half_life = float(self.config.memory_half_life_s)
         registry = build_tool_registry(self.config.agent_id, composed)
         encoder = build_encoder(composed)
         classifier = resolve_event_classifier(composed)
