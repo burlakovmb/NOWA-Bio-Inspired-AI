@@ -46,10 +46,13 @@ class RoleConfig:
     param_bindings: Dict[str, Any] = None
     mcp_servers: List[Dict[str, Any]] = None
     event_classifier_paths: List[str] = None
+    token_rules: Dict[str, Any] = None
 
     def __post_init__(self) -> None:
         if self.field_aliases is None:
             self.field_aliases = {}
+        if self.token_rules is None:
+            self.token_rules = {}
         if self.param_bindings is None:
             self.param_bindings = {}
         if self.mcp_servers is None:
@@ -100,6 +103,7 @@ def load_role_config_from_mapping(raw: Any, path: str) -> RoleConfig:
     event_classifier_path = str(raw.get("event_classifier") or "").strip()
     field_aliases = raw.get("field_aliases") if isinstance(raw.get("field_aliases"), dict) else {}
     param_bindings = raw.get("param_bindings") if isinstance(raw.get("param_bindings"), dict) else {}
+    token_rules = raw.get("token_rules") if isinstance(raw.get("token_rules"), dict) else {}
     mcp_servers = _parse_mcp_servers(raw.get("mcp_servers"), path)
     if not mcp_servers:
         mcp_servers = _servers_from_capabilities(capabilities)
@@ -125,6 +129,7 @@ def load_role_config_from_mapping(raw: Any, path: str) -> RoleConfig:
         event_classifier_paths=(
             [event_classifier_path] if event_classifier_path else []
         ),
+        token_rules=dict(token_rules or {}),
     )
     validate_role_config(config)  # raises on cross-reference mismatches
     return config
@@ -452,6 +457,7 @@ def build_encoder(config: RoleConfig) -> BusinessEventEncoder:
     return BusinessEventEncoder(
         affective_mapping=config.affective_mapping,
         field_aliases=getattr(config, "field_aliases", None) or {},
+        token_rules=getattr(config, "token_rules", None) or {},
     )
 
 

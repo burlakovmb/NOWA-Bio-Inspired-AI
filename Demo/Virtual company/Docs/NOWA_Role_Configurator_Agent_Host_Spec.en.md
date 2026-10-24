@@ -95,6 +95,7 @@ The invariants of the virtual-employee architecture remain in force:
 2. Learning occurs only during sleep (`sleep_cycle`). Sleep does **not** follow from the fact of a tick;
    its period is set separately and is counted in **wall-clock seconds**, not in
    a number of ticks (section 5.6).
+   Since #13: waking outcomes go to the labile tier, stable values change only in `Agent.sleep()`; the employee host passes `dt` ([issue-13-demo-virtual-company.en.md](../../../Docs/specs/issue-13-demo-virtual-company.en.md)).
 3. The mind does not import MCP. Basal-ganglia channels are WRITE `tool_id` values plus `wait_and_monitor`.
 4. HIGH_WRITE and IRREVERSIBLE are not bypassed by A(t) and are not bypassed by the Start button.
 5. MotorAdapter is **not** an extension point. WRITE parameters are assembled by

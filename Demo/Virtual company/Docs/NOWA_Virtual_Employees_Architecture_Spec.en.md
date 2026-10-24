@@ -28,6 +28,7 @@ These principles were established in previous NOWA specifications and remain in 
    affective space, neuromodulators, and genome.
 2. **Learning occurs only in sleep.** `sleep_manager.sleep_cycle()` is the sole
    mechanism of consolidation. During the working day (waking) the agent does not change weights.
+   Since #13: waking outcomes go to the labile tier, stable values change only in `Agent.sleep()`; the employee host passes `dt` ([issue-13-demo-virtual-company.en.md](../../../Docs/specs/issue-13-demo-virtual-company.en.md)).
 3. **NOWA does not generate text.** It selects from `RealizationExperience`,
    or makes a decision about an *intention*. The formulation of text is a separate layer
    (see section 4).

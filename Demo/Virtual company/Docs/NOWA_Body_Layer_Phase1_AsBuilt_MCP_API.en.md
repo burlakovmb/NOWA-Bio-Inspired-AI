@@ -74,6 +74,7 @@ Inherited without change:
 2. Learning occurs only during sleep. The waking cycle of the body uses
    `agent.step(..., decision_only=True)` and writes an episode **after** a known
    outcome.
+   Since #13: waking outcomes go to the labile tier, stable values change only in `Agent.sleep()`; the employee host passes `dt` ([issue-13-demo-virtual-company.en.md](../../../Docs/specs/issue-13-demo-virtual-company.en.md)).
 3. Money, risk, and approval lie outside the cognitive circuit. The agent cannot
    “change its mind” about `ApprovalGate`.
 4. MCP tools are organs of the agent, not “integrations”. The NOWA core does not import

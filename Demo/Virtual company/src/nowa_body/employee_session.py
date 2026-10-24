@@ -48,7 +48,7 @@ from .role_config import (
 )
 from .runtime import BusinessAgentRuntime
 from .sensor_poller import poll_sensors
-from .sleep_scheduler import SleepScheduler
+from .sleep_scheduler import SleepScheduler, configure_plasticity
 
 STATUS_STOPPED = "stopped"
 STATUS_STARTING = "starting"
@@ -80,14 +80,22 @@ def role_fingerprint(roles_root: Any, role_ids: List[str]) -> str:
     return "|".join(parts)
 
 
-def spawn_employee_agent(agent_id: str) -> Any:
-    """Core AgentFactory when available; lab stub otherwise. No force_action."""
+def spawn_employee_agent(agent_id: str, scheduler: Optional[SleepScheduler] = None) -> Any:
+    """Core AgentFactory when available; lab stub otherwise. No force_action.
+
+    ``scheduler`` sets the two-tier wake interval right after construction,
+    before the first cycle; without it the core default applies until
+    ``configure_plasticity`` runs.
+    """
     ensure_core_src_on_path()
     try:
         from agent_factory import AgentConfig, AgentFactory
 
         factory = AgentFactory(AgentConfig(actions=["wait_and_monitor"]))
-        return factory.spawn_default(agent_id=agent_id)
+        agent = factory.spawn_default(agent_id=agent_id)
+        if scheduler is not None:
+            configure_plasticity(agent, scheduler)
+        return agent
     except Exception:
         from .lab_session import LabSettings, create_lab_agent
 
@@ -274,7 +282,14 @@ class EmployeeSession:
         self.composed = composed
         self._fingerprint = role_fingerprint(self.roles_root, list(self.config.role_ids))
         self.router = self._open_transports(composed)
-        agent = spawn_employee_agent(self.config.agent_id)
+        sleep_cfg = self.config.sleep
+        scheduler = SleepScheduler(
+            circadian_window=sleep_cfg.circadian_window,
+            fatigue_threshold=sleep_cfg.fatigue_threshold,
+            min_ticks_between_sleep=0,
+            min_interval_s=float(sleep_cfg.min_interval_s),
+        )
+        agent = spawn_employee_agent(self.config.agent_id, scheduler)
         mind = mind_path(self.employees_root, self.config.agent_id)
         self.last_start_seeded = False
         if mind.is_file():
@@ -288,16 +303,15 @@ class EmployeeSession:
         elif self.config.seed_intuition:
             build_seeder(composed).seed_agent(agent)
             self.last_start_seeded = True
+        if self.config.memory_half_life_s is not None:
+            hippocampus = getattr(agent, "hippocampus", None)
+            if hippocampus is not None:
+                hippocampus.activation_decay_half_life = float(self.config.memory_half_life_s)
         registry = build_tool_registry(self.config.agent_id, composed)
         encoder = build_encoder(composed)
         classifier = resolve_event_classifier(composed)
-        sleep_cfg = self.config.sleep
-        scheduler = SleepScheduler(
-            circadian_window=sleep_cfg.circadian_window,
-            fatigue_threshold=sleep_cfg.fatigue_threshold,
-            min_ticks_between_sleep=0,
-            min_interval_s=float(sleep_cfg.min_interval_s),
-        )
+        # A checkpoint may carry the interval of an older schedule.
+        configure_plasticity(agent, scheduler)
         gate = ApprovalGate(
             mcp_executor=self._execute_write,
             capability_lookup=registry.get,

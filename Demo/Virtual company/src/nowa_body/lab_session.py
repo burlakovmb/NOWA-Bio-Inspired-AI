@@ -28,12 +28,13 @@ from nowa_body.role_config import (
     resolve_event_classifier,
 )
 from nowa_body.runtime import BusinessAgentRuntime
-from nowa_body.sleep_scheduler import SleepScheduler
+from nowa_body.sleep_scheduler import SleepScheduler, configure_plasticity
 from nowa_body.tool_registry import MCPToolRegistry
 
 STOCK_TOOL = "mcp__drivemcp__get_stock_levels"
 SUPPLIER_TOOL = "mcp__drivemcp__get_suppliers"
 BUDGET_TOOL = "mcp__drivemcp__get_budget"
+NEEDS_TOOL = "mcp__drivemcp__get_replenishment_needs"
 ORDER_TOOL = "mcp__drivemcp__create_purchase_order"
 
 SCENARIO_QUIET = "quiet"
@@ -231,16 +232,23 @@ class GuidedAgent:
             inner_ws = getattr(inner, "wakefulness", None)
         object.__setattr__(self, "wakefulness_state", PressureKnob(inner_ws))
 
-    def step(self, context_events, decision_only=True):
+    def step(self, context_events, decision_only=True, dt=None):
+        inner = object.__getattribute__(self, "_inner")
         forced = str(getattr(self, "force_action", "") or "").strip()
         if forced and forced != FORCE_AUTO:
+            # A forced action skips the mind, not the host clock.
+            advance = getattr(inner, "advance_time", None)
+            if dt is not None and callable(advance):
+                advance(float(dt))
             return forced
-        inner = object.__getattribute__(self, "_inner")
         step_fn = getattr(inner, "step", None)
         if not callable(step_fn):
             return "wait_and_monitor"
+        kwargs = {"decision_only": decision_only}
+        if dt is not None:
+            kwargs["dt"] = dt
         try:
-            return step_fn(context_events, decision_only=decision_only)
+            return step_fn(context_events, **kwargs)
         except TypeError:
             return step_fn(context_events)
 
@@ -313,6 +321,31 @@ def _copy_suppliers(*, defaulted: bool = False) -> Dict[str, dict]:
     }
 
 
+def replenishment_needs(world: LabWorld) -> Dict[str, Any]:
+    """The ERP's own trigger list, as 1C:Drive ``get_replenishment_needs`` returns it.
+
+    Only positions below the reorder point, with a suggested quantity and the
+    first supplier that has not defaulted.
+    """
+    supplier = next(
+        (sid for sid, info in world.suppliers.items() if not info.get("is_defaulted")),
+        next(iter(world.suppliers), ""),
+    )
+    items: Dict[str, dict] = {}
+    for sku, info in world.stock.items():
+        if not info.get("below_reorder_point"):
+            continue
+        reorder_point = float(info.get("reorder_point") or 0.0)
+        quantity = float(info.get("quantity") or 0.0)
+        items[sku] = {
+            "quantity": quantity,
+            "reorder_point": reorder_point,
+            "suggested_qty": max(1.0, 2.0 * reorder_point - quantity),
+            "default_supplier_id": supplier,
+        }
+    return {"status": "ok", "needs_replenishment": bool(items), "items": items}
+
+
 def world_for_scenario(scenario: str, write_status: str = WRITE_ACCEPTED) -> LabWorld:
     name = scenario if scenario in SCENARIOS else SCENARIO_STOCK_CRITICAL
     if name == SCENARIO_QUIET:
@@ -329,6 +362,14 @@ def world_for_scenario(scenario: str, write_status: str = WRITE_ACCEPTED) -> Lab
         suppliers=suppliers,
         budget={"remaining": 8_000.0, "utilization_ratio": 0.35},
         write_status=write_status if write_status in WRITE_OUTCOMES else WRITE_ACCEPTED,
+    )
+
+
+def lab_scheduler(settings: LabSettings) -> SleepScheduler:
+    return SleepScheduler(
+        circadian_window=settings.circadian_window,
+        fatigue_threshold=settings.fatigue_threshold,
+        min_ticks_between_sleep=int(settings.min_ticks_between_sleep),
     )
 
 
@@ -351,6 +392,7 @@ def create_lab_agent(settings: LabSettings) -> GuidedAgent:
     backend = "core" if inner is not None else "stub"
     if inner is None:
         inner = LabStubAgent(settings.agent_id)
+    configure_plasticity(inner, lab_scheduler(settings), float(settings.seconds_per_tick))
     agent = GuidedAgent(inner)
     agent.backend = backend
     agent.force_action = settings.force_action
@@ -438,13 +480,11 @@ class BodyLabSession:
         self.client.register(MockMCPTool(BUDGET_TOOL, lambda _p: {
             "status": "ok", **self.world.budget,
         }))
+        self.client.register(MockMCPTool(NEEDS_TOOL, lambda _p: replenishment_needs(self.world)))
         self.client.register(MockMCPTool(ORDER_TOOL, self._write_order))
 
-        scheduler = SleepScheduler(
-            circadian_window=self.settings.circadian_window,
-            fatigue_threshold=self.settings.fatigue_threshold,
-            min_ticks_between_sleep=int(self.settings.min_ticks_between_sleep),
-        )
+        scheduler = lab_scheduler(self.settings)
+        configure_plasticity(self.agent, scheduler, float(self.settings.seconds_per_tick))
         self.runtime = BusinessAgentRuntime(
             agent=self.agent,
             tool_registry=self.registry,
@@ -482,6 +522,7 @@ class BodyLabSession:
         stock = self._execute(STOCK_TOOL, {})
         suppliers = self._execute(SUPPLIER_TOOL, {})
         budget = self._execute(BUDGET_TOOL, {})
+        needs = self._execute(NEEDS_TOOL, {})
         return {
             "agent_id": self.settings.agent_id,
             "stock": self.world.stock,
@@ -491,6 +532,7 @@ class BodyLabSession:
                 STOCK_TOOL: stock,
                 SUPPLIER_TOOL: suppliers,
                 BUDGET_TOOL: budget,
+                NEEDS_TOOL: needs,
             },
         }
 

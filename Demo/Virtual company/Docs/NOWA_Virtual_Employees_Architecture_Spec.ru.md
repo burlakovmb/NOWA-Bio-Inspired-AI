@@ -26,6 +26,7 @@ English version: [NOWA_Virtual_Employees_Architecture_Spec.en.md](NOWA_Virtual_E
    аффективным пространством, нейромодуляторами, геномом.
 2. **Обучение только во сне.** `sleep_manager.sleep_cycle()` — единственный
    механизм консолидации. Во время рабочего дня (waking) агент не меняет веса.
+   С #13: дневные исходы идут в лабильный слой, стабильные значения меняются только в `Agent.sleep()`; хост сотрудника передаёт `dt` ([issue-13-demo-virtual-company.ru.md](../../../Docs/specs/issue-13-demo-virtual-company.ru.md)).
 3. **NOWA не генерирует текст.** Она выбирает из `RealizationExperience` /
    принимает решения о *намерении*. Формулировка текста — отдельный слой
    (см. раздел 4).

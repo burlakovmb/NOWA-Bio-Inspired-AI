@@ -8,7 +8,6 @@ from mcp_body import (
     ApprovalGate,
     ApprovalRecord,
     ApprovalStatus,
-    BusinessAgentRuntime,
     BusinessHippocampusSeeder,
     CapabilityRisk,
     GenericEncoder,
@@ -27,6 +26,7 @@ from mcp_body import (
 
 from .business_event_encoder import BusinessEventEncoder, BusinessEventImpulse
 from .mock_mcp import MockMCPClient, MockMCPTool
+from .runtime import BusinessAgentRuntime
 from .motor_adapter import MotorAdapter
 from .role_config import (
     RoleConfig,
