@@ -49,7 +49,7 @@ def test_feedback_applied_only_after_real_execution(monkeypatch):
     def _capture(agent, record, encoder):
         calls.append(record.executed)
 
-    monkeypatch.setattr("mcp_body.feedback.apply_feedback_to_agent", _capture)
+    monkeypatch.setattr("nowa_body.runtime.apply_feedback_to_agent", _capture)
 
     executed_agent = make_test_agent_that_always_acts()
     executed_runtime = make_test_runtime(

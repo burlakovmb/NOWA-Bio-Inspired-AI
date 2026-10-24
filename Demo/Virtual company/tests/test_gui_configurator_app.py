@@ -270,3 +270,54 @@ def test_tick_log_copy_and_selection_survives_refresh(tmp_path):
         assert "alpha bravo charlie" in app._selected_text(app.txt_emp_log)
     finally:
         app.destroy()
+
+
+class _AlertingEmployeeHost(_StubEmployeeHost):
+    def clear_alerts(self, agent_id):
+        self._row["alerts"] = []
+
+
+@pytest.mark.tk
+def test_business_limit_alerts_show_on_card_and_home_and_clear(tmp_path):
+    row = {
+        "agent_id": "buyer",
+        "display_name": "Buyer",
+        "status": "running",
+        "role_ids": ["procurement"],
+        "tick_interval_s": 10.0,
+        "sleep_min_interval_s": 3600.0,
+        "pending_n": 0,
+        "pending": [],
+        "error_text": "",
+        "stale_roles": False,
+        "log": [],
+        "alerts": [
+            {"at": "2026-10-20T09:15:00", "limit": "budget", "reason": "nothing_left",
+             "available": 0.0, "summary": "create_purchase_order sku=sku-a qty=40"},
+            {"at": "2026-10-21T11:30:00", "limit": "budget", "reason": "over_available",
+             "available": 6.5, "summary": "create_purchase_order sku=sku-b qty=10"},
+        ],
+    }
+    app = RoleConfiguratorApp(
+        controller=RoleConfiguratorController(roles_root=tmp_path),
+        employee_host=_AlertingEmployeeHost(row),
+    )
+    try:
+        app.withdraw()
+        app.update_idletasks()
+        app._refresh_employees()
+        assert "2" in str(app._emp_home_cards["buyer"]["alerts"].cget("text"))
+
+        app._open_employee("buyer")
+        app.update_idletasks()
+        assert app.frm_emp_alerts.winfo_manager() == "pack"
+        body = str(app.lbl_emp_alerts_body.cget("text"))
+        first, second = body.splitlines()
+        assert first.startswith("11:30") and "sku-b" in first and "6.5" in first
+        assert second.startswith("09:15") and "sku-a" in second
+
+        app._on_emp_clear_alerts()
+        app.update_idletasks()
+        assert app.frm_emp_alerts.winfo_manager() == ""
+    finally:
+        app.destroy()

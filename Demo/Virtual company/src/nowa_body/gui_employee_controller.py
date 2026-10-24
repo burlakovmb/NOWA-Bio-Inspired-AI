@@ -7,7 +7,13 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .employee_checkpoint import delete_memory_files, mind_path
+from .employee_checkpoint import (
+    delete_memory_files,
+    load_sidecar,
+    mind_path,
+    save_sidecar,
+    sidecar_path,
+)
 from .employee_config import (
     AGENT_ID_RE,
     EmployeeConfig,
@@ -115,6 +121,7 @@ class EmployeeHostController:
             "circadian_window": list(config.sleep.circadian_window),
             "fatigue_threshold": config.sleep.fatigue_threshold,
             "log": [],
+            "alerts": self._stored_alerts(agent_id),
             "pending": [],
             "episodes": 0,
             "checkpoint": (
@@ -300,11 +307,30 @@ class EmployeeHostController:
             rejection_reason=rejection_reason,
         )
 
+    def clear_alerts(self, agent_id: str) -> None:
+        """Forget the shown business-limit alerts (the person has seen them)."""
+        session = self.sessions.get(agent_id)
+        if session is not None:
+            session.alerts.clear()
+        if session is not None and session.status in LIVE_STATUSES:
+            return  # the next Stop saves the cleared list
+        path = sidecar_path(self.employees_root, agent_id)
+        sidecar = load_sidecar(path)
+        if sidecar.get("alerts"):
+            sidecar["alerts"] = []
+            save_sidecar(path, sidecar)
+
+    def _stored_alerts(self, agent_id: str) -> List[Dict[str, Any]]:
+        alerts = load_sidecar(sidecar_path(self.employees_root, agent_id)).get("alerts")
+        return [item for item in alerts or [] if isinstance(item, dict)]
+
     def reset_memory(self, agent_id: str) -> None:
         session = self.sessions.get(agent_id)
         if session is not None and session.status not in (STATUS_STOPPED, STATUS_ERROR):
             raise ConfiguratorError("reset memory only while stopped")
         delete_memory_files(self.employees_root, agent_id)
+        if session is not None:
+            session.alerts.clear()
 
     def delete_employee(self, agent_id: str) -> None:
         """Stop if live, then remove the employee folder (yaml, mind, sidecar)."""

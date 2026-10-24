@@ -304,6 +304,21 @@ class RoleConfiguratorApp(tk.Tk if tk is not None else object):
         self.btn_emp_delete = ttk.Button(actions, command=self._on_emp_delete)
         self.btn_emp_delete.pack(side="left", padx=8)
 
+        # Writes a business limit kept from the ERP; packed only when present.
+        self.frm_emp_alerts = ttk.Frame(parent)
+        alerts_head = ttk.Frame(self.frm_emp_alerts)
+        alerts_head.pack(fill="x")
+        self.lbl_emp_alerts = ttk.Label(
+            alerts_head, font=("Segoe UI", 10, "bold"), foreground="#a35200"
+        )
+        self.lbl_emp_alerts.pack(side="left")
+        self.btn_emp_alerts_clear = ttk.Button(alerts_head, command=self._on_emp_clear_alerts)
+        self.btn_emp_alerts_clear.pack(side="left", padx=8)
+        self.lbl_emp_alerts_body = ttk.Label(
+            self.frm_emp_alerts, wraplength=900, justify="left", foreground="#a35200"
+        )
+        self.lbl_emp_alerts_body.pack(anchor="w")
+
         self.lbl_emp_approval = ttk.Label(parent, font=("Segoe UI", 10, "bold"))
         self.lbl_emp_approval.pack(anchor="w", padx=12)
         approval_body = ttk.Frame(parent)
@@ -748,6 +763,7 @@ class RoleConfiguratorApp(tk.Tk if tk is not None else object):
         self.btn_emp_reset.configure(text=self.t("emp.reset_memory"))
         self.btn_emp_delete.configure(text=self.t("emp.delete"))
         self.lbl_emp_approval.configure(text=self.t("emp.approval"))
+        self.btn_emp_alerts_clear.configure(text=self.t("emp.alerts_clear"))
         self.lbl_emp_log.configure(text=self.t("emp.log"))
         self.lbl_emp_narrative.configure(text=self.t("emp.narrative"))
         self._fill_scenario_combo()
@@ -2541,6 +2557,7 @@ class RoleConfiguratorApp(tk.Tk if tk is not None else object):
         rhythm_lbl = ttk.Label(card)
         rhythm_lbl.pack(anchor="w", padx=8)
         pending_lbl = ttk.Label(card)
+        alerts_lbl = ttk.Label(card, foreground="#a35200")
         error_lbl = ttk.Label(card, wraplength=380, foreground="#a40000")
         btns = ttk.Frame(card)
         btns.pack(fill="x", padx=8, pady=6)
@@ -2568,6 +2585,7 @@ class RoleConfiguratorApp(tk.Tk if tk is not None else object):
             "roles": roles_lbl,
             "rhythm": rhythm_lbl,
             "pending": pending_lbl,
+            "alerts": alerts_lbl,
             "error": error_lbl,
             "start": start_btn,
         }
@@ -2597,12 +2615,21 @@ class RoleConfiguratorApp(tk.Tk if tk is not None else object):
                 pending_lbl.pack(anchor="w", padx=8, after=widgets["rhythm"])
         else:
             pending_lbl.pack_forget()
+        alerts_n = len(row.get("alerts") or [])
+        alerts_lbl = widgets["alerts"]
+        if alerts_n:
+            alerts_lbl.configure(text=self.t("emp.alerts_badge", n=alerts_n))
+            if not alerts_lbl.winfo_ismapped():
+                after = pending_lbl if pending_n else widgets["rhythm"]
+                alerts_lbl.pack(anchor="w", padx=8, after=after)
+        else:
+            alerts_lbl.pack_forget()
         err = str(row.get("error_text") or "")
         error_lbl = widgets["error"]
         if err:
             error_lbl.configure(text=err)
             if not error_lbl.winfo_ismapped():
-                after = pending_lbl if pending_n else widgets["rhythm"]
+                after = alerts_lbl if alerts_n else (pending_lbl if pending_n else widgets["rhythm"])
                 error_lbl.pack(anchor="w", padx=8, after=after)
         else:
             error_lbl.pack_forget()
@@ -2678,8 +2705,43 @@ class RoleConfiguratorApp(tk.Tk if tk is not None else object):
         if self._emp_card_fp.get("pending") != pending_fp:
             self._render_emp_approvals(pending)
             self._emp_card_fp["pending"] = pending_fp
+        self._render_emp_alerts(list(row.get("alerts") or []))
         self._set_text(self.txt_emp_log, "\n".join(row.get("log") or []) or "—")
         self._set_text(self.txt_emp_narrative, self._emp_narrative_text())
+
+    _EMP_ALERTS_SHOWN = 5
+
+    def _render_emp_alerts(self, alerts: List[Dict[str, Any]]) -> None:
+        if not alerts:
+            self.frm_emp_alerts.pack_forget()
+            return
+        self.lbl_emp_alerts.configure(text=self.t("emp.alerts", n=len(alerts)))
+        lines = [self._fmt_emp_alert(item) for item in alerts[-self._EMP_ALERTS_SHOWN:]]
+        self.lbl_emp_alerts_body.configure(text="\n".join(reversed(lines)))
+        if not self.frm_emp_alerts.winfo_ismapped():
+            self.frm_emp_alerts.pack(fill="x", padx=12, pady=(0, 6), before=self.lbl_emp_approval)
+
+    def _fmt_emp_alert(self, alert: Dict[str, Any]) -> str:
+        reason = str(alert.get("reason") or "")
+        key = f"emp.alert_reason.{reason}"
+        available = alert.get("available")
+        shown = f"{available:g}" if isinstance(available, (int, float)) else "?"
+        reason_text = self.t(key, available=shown)
+        if reason_text == key:
+            reason_text = reason
+        at = str(alert.get("at") or "")
+        return self.t(
+            "emp.alert_line",
+            at=at[11:16] if len(at) >= 16 else at,
+            limit=str(alert.get("limit") or ""),
+            summary=str(alert.get("summary") or alert.get("tool_id") or ""),
+            reason=reason_text,
+        )
+
+    def _on_emp_clear_alerts(self) -> None:
+        if self._current_employee_id:
+            self.employee_host.clear_alerts(self._current_employee_id)
+            self._refresh_employee_card()
 
     def _emp_pending_fp(self, pending: List[Any]) -> tuple:
         rows = []

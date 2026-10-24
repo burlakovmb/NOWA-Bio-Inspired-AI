@@ -82,6 +82,26 @@ class SleepScheduler:
             return True, "fatigue"
         return False, ""
 
+    def expected_wake_interval_s(self, seconds_per_tick: Optional[float] = None) -> float:
+        """Typical waking span between two sleeps, in host seconds.
+
+        The core sizes its labile tier by it (``PlasticityConfig``). With the
+        nightly window and no fatigue trigger the agent sleeps once a day, or
+        less often when the anti-thrash interval is longer. A fatigue trigger
+        can only make sleep come sooner, so the anti-thrash interval is then
+        the closest bound.
+        """
+        day = 24 * 3600.0
+        if self.min_interval_s is not None:
+            floor = float(self.min_interval_s)
+        elif seconds_per_tick:
+            floor = float(self.min_ticks_between_sleep) * float(seconds_per_tick)
+        else:
+            floor = 0.0
+        if self.fatigue_threshold is None or floor <= 0.0:
+            return max(day, floor)
+        return floor
+
     def mark_slept(self, now: Optional[datetime] = None) -> None:
         self._ticks_since_last_sleep = 0
         self._last_slept_at = now if now is not None else datetime.now()
@@ -126,3 +146,20 @@ class SleepScheduler:
                 if isinstance(result, (int, float)) and not isinstance(result, bool):
                     return float(result)
         return None
+
+
+def configure_plasticity(
+    agent: Any, scheduler: SleepScheduler, seconds_per_tick: Optional[float] = None
+) -> Optional[float]:
+    """Tell the core how long the agent stays awake between sleeps.
+
+    Set after construction and after every load: the core reads the interval
+    lazily, and a checkpoint may carry an older value. Returns the interval,
+    or None when the agent has no two-tier core (a lab stub).
+    """
+    plasticity = getattr(agent, "plasticity", None)
+    if plasticity is None or not hasattr(plasticity, "expected_wake_interval_s"):
+        return None
+    interval = scheduler.expected_wake_interval_s(seconds_per_tick)
+    plasticity.expected_wake_interval_s = interval
+    return interval

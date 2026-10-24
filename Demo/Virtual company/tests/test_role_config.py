@@ -112,7 +112,7 @@ class TestLoadRoleConfig:
         config = load_role_config(PROCUREMENT_CONFIG_PATH)
         assert config.role_id == "procurement"
         assert len(config.capabilities) == 6
-        assert len(config.seed_corpus) == 8
+        assert len(config.seed_corpus) == 9
 
     def test_missing_file_raises(self):
         with pytest.raises(RoleConfigError, match="not found"):
@@ -288,8 +288,12 @@ class TestResolveOptionalCodePointers:
         fn = resolve_event_classifier(config)
         assert fn is classify_procurement_events
 
-    def test_procurement_yaml_has_no_required_event_classifier(self):
-        config = load_role_config(PROCUREMENT_CONFIG_PATH)
+    def test_procurement_yaml_has_no_required_event_classifier(self, tmp_path):
+        raw = yaml.safe_load(Path(PROCUREMENT_CONFIG_PATH).read_text(encoding="utf-8"))
+        raw.pop("event_classifier", None)
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        config = load_role_config(str(path))
         assert resolve_event_classifier(config) is None
 
     def test_non_callable_event_classifier_raises(self, tmp_path):
@@ -315,7 +319,7 @@ class TestBuildHelpers:
         seeder = build_seeder(config)
         agent = make_test_agent()
         n = seeder.seed_agent(agent)
-        assert n == 8
+        assert n == 9
 
 
 class TestBodyLabSessionWiring:

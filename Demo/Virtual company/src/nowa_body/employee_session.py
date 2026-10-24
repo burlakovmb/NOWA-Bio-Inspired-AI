@@ -48,7 +48,7 @@ from .role_config import (
 )
 from .runtime import BusinessAgentRuntime
 from .sensor_poller import poll_sensors
-from .sleep_scheduler import SleepScheduler
+from .sleep_scheduler import SleepScheduler, configure_plasticity
 
 STATUS_STOPPED = "stopped"
 STATUS_STARTING = "starting"
@@ -80,14 +80,22 @@ def role_fingerprint(roles_root: Any, role_ids: List[str]) -> str:
     return "|".join(parts)
 
 
-def spawn_employee_agent(agent_id: str) -> Any:
-    """Core AgentFactory when available; lab stub otherwise. No force_action."""
+def spawn_employee_agent(agent_id: str, scheduler: Optional[SleepScheduler] = None) -> Any:
+    """Core AgentFactory when available; lab stub otherwise. No force_action.
+
+    ``scheduler`` sets the two-tier wake interval right after construction,
+    before the first cycle; without it the core default applies until
+    ``configure_plasticity`` runs.
+    """
     ensure_core_src_on_path()
     try:
         from agent_factory import AgentConfig, AgentFactory
 
         factory = AgentFactory(AgentConfig(actions=["wait_and_monitor"]))
-        return factory.spawn_default(agent_id=agent_id)
+        agent = factory.spawn_default(agent_id=agent_id)
+        if scheduler is not None:
+            configure_plasticity(agent, scheduler)
+        return agent
     except Exception:
         from .lab_session import LabSettings, create_lab_agent
 
@@ -116,6 +124,9 @@ class EmployeeSession:
         self.last_start_seeded = False
         self.tick_index = 0
         self.log: Deque[str] = deque(maxlen=200)
+        # Writes a business limit kept from the ERP, one per shortage episode:
+        # what a person (the supervisor) has to act on, e.g. allocate budget.
+        self.alerts: Deque[Dict[str, Any]] = deque(maxlen=50)
         self.snapshots: Deque[Dict[str, Any]] = deque(maxlen=50)
         self.last_sensor_at: Optional[datetime] = None
         self.composed: Optional[Any] = None
@@ -274,7 +285,14 @@ class EmployeeSession:
         self.composed = composed
         self._fingerprint = role_fingerprint(self.roles_root, list(self.config.role_ids))
         self.router = self._open_transports(composed)
-        agent = spawn_employee_agent(self.config.agent_id)
+        sleep_cfg = self.config.sleep
+        scheduler = SleepScheduler(
+            circadian_window=sleep_cfg.circadian_window,
+            fatigue_threshold=sleep_cfg.fatigue_threshold,
+            min_ticks_between_sleep=0,
+            min_interval_s=float(sleep_cfg.min_interval_s),
+        )
+        agent = spawn_employee_agent(self.config.agent_id, scheduler)
         mind = mind_path(self.employees_root, self.config.agent_id)
         self.last_start_seeded = False
         if mind.is_file():
@@ -288,16 +306,15 @@ class EmployeeSession:
         elif self.config.seed_intuition:
             build_seeder(composed).seed_agent(agent)
             self.last_start_seeded = True
+        if self.config.memory_half_life_s is not None:
+            hippocampus = getattr(agent, "hippocampus", None)
+            if hippocampus is not None:
+                hippocampus.activation_decay_half_life = float(self.config.memory_half_life_s)
         registry = build_tool_registry(self.config.agent_id, composed)
         encoder = build_encoder(composed)
         classifier = resolve_event_classifier(composed)
-        sleep_cfg = self.config.sleep
-        scheduler = SleepScheduler(
-            circadian_window=sleep_cfg.circadian_window,
-            fatigue_threshold=sleep_cfg.fatigue_threshold,
-            min_ticks_between_sleep=0,
-            min_interval_s=float(sleep_cfg.min_interval_s),
-        )
+        # A checkpoint may carry the interval of an older schedule.
+        configure_plasticity(agent, scheduler)
         gate = ApprovalGate(
             mcp_executor=self._execute_write,
             capability_lookup=registry.get,
@@ -311,6 +328,8 @@ class EmployeeSession:
             sensor_refresh_interval_s=float(self.config.sensor_refresh_interval_s),
             simulated_tick_seconds=float(self.config.tick_interval_s),
             event_classifier=classifier,
+            business_limits=list(composed.business_limits or []),
+            limit_notifier=self._notify_limit,
             param_bindings=dict(composed.param_bindings or {}),
             field_aliases=dict(composed.field_aliases or {}),
         )
@@ -350,6 +369,17 @@ class EmployeeSession:
                 self.tick_index = int(sidecar.get("tick_index") or 0)
             except (TypeError, ValueError):
                 self.tick_index = 0
+            # A shortage that outlived the stop is the same shortage: no new
+            # lesson and no new alert for it after a restart.
+            for name, opened_at in dict(sidecar.get("limit_shortages") or {}).items():
+                try:
+                    runtime._limit_shortages[str(name)] = float(opened_at)
+                except (TypeError, ValueError):
+                    continue
+            self.alerts.clear()
+            self.alerts.extend(
+                item for item in sidecar.get("alerts") or [] if isinstance(item, dict)
+            )
         runtime.register_organs_on_agent()
         self.agent = agent
         self.runtime = runtime
@@ -412,6 +442,16 @@ class EmployeeSession:
             result = {"status": "unknown", "value": result}
         self._append_log(self._format_write_log(tool_id, result))
         return result
+
+    def _notify_limit(self, notice: Dict[str, Any]) -> None:
+        notice = dict(notice)
+        notice["at"] = self._now().isoformat(timespec="seconds")
+        self.alerts.append(notice)
+        line = f"limit {notice.get('limit')} blocked {notice.get('summary') or notice.get('tool_id')}"
+        line += f" reason={notice.get('reason')}"
+        if notice.get("available") is not None:
+            line += f" available={notice.get('available')}"
+        self._append_log(line)
 
     @staticmethod
     def _format_write_log(tool_id: str, result: Dict[str, Any]) -> str:
@@ -537,6 +577,10 @@ class EmployeeSession:
                     ),
                     "sleep": self._sleep_sidecar(),
                     "tick_index": self.tick_index,
+                    "alerts": list(self.alerts),
+                    "limit_shortages": dict(
+                        getattr(self.runtime, "_limit_shortages", None) or {}
+                    ),
                     "stopped_at": iso_now(),
                     "role_fingerprint": self._fingerprint,
                     "role_ids": list(self.config.role_ids),
@@ -627,6 +671,7 @@ class EmployeeSession:
             "pending_n": len(pending),
             "tick_index": self.tick_index,
             "log": list(self.log),
+            "alerts": list(self.alerts),
             "episodes": episodes,
             "n_read": n_read,
             "n_write": n_write,

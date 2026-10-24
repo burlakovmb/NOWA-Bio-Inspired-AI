@@ -377,6 +377,66 @@ class TestEmployeeSessionMock:
         finally:
             session.stop()
 
+    def test_limit_block_is_logged_and_kept_as_an_alert(self, tmp_path):
+        role_id = self._mock_role(tmp_path)
+        employees = tmp_path / "nowa_employees"
+        config = new_employee_config("buyer_l", "Buyer L", [role_id])
+        save_employee_config(config, employees, create_backup=False)
+        session = EmployeeSession(config, tmp_path, employees)
+        session.start(worker=False)
+        try:
+            assert session.runtime.limit_notifier == session._notify_limit
+            session._notify_limit({
+                "limit": "budget", "reason": "nothing_left", "available": 0.0,
+                "tool_id": "mcp__lab__create_order", "summary": "create_order qty=5",
+            })
+            assert any(
+                line.startswith("limit budget blocked create_order qty=5 reason=nothing_left")
+                for line in session.log
+            )
+            alerts = session.snapshot()["alerts"]
+            assert [a["limit"] for a in alerts] == ["budget"] and alerts[0]["at"]
+            host = EmployeeHostController(tmp_path, employees)
+            host.sessions["buyer_l"] = session
+            assert len(host.row_for("buyer_l")["alerts"]) == 1
+            host.clear_alerts("buyer_l")
+            assert host.row_for("buyer_l")["alerts"] == []
+        finally:
+            session.stop()
+
+    def test_alerts_and_open_shortages_survive_a_restart(self, tmp_path):
+        role_id = self._mock_role(tmp_path)
+        employees = tmp_path / "nowa_employees"
+        config = new_employee_config("buyer_p", "Buyer P", [role_id])
+        save_employee_config(config, employees, create_backup=False)
+        notice = {"limit": "budget", "reason": "nothing_left", "available": 0.0,
+                  "tool_id": "mcp__lab__create_order", "summary": "create_order qty=5"}
+        session = EmployeeSession(config, tmp_path, employees)
+        session.start(worker=False)
+        session._notify_limit(dict(notice))
+        session.runtime._limit_shortages["budget"] = 0.0
+        session.stop()
+
+        host = EmployeeHostController(tmp_path, employees)
+        assert [a["limit"] for a in host.row_for("buyer_p")["alerts"]] == ["budget"]
+
+        again = EmployeeSession(config, tmp_path, employees)
+        again.start(worker=False)
+        try:
+            assert [a["summary"] for a in again.snapshot()["alerts"]] == ["create_order qty=5"]
+            assert again.runtime._limit_shortages == {"budget": 0.0}
+        finally:
+            again.stop()
+
+        host.clear_alerts("buyer_p")
+        assert host.row_for("buyer_p")["alerts"] == []
+        third = EmployeeSession(config, tmp_path, employees)
+        third.start(worker=False)
+        try:
+            assert third.snapshot()["alerts"] == []
+        finally:
+            third.stop()
+
     def test_start_drops_sidecar_pending_when_approval_is_off(self, tmp_path):
         _write_role(
             tmp_path,
