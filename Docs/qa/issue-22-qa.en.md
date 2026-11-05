@@ -1,19 +1,19 @@
 # QA issue #22 — colony old age in sim-seconds
 
-Branch: `team/issue-22-colony-lifespan-sim-seconds`. Checked `73c2e87` (this note is the next commit).
+Branch: `team/issue-22-colony-lifespan-sim-seconds`. Checked product commit `73c2e87`. First QA note is `3c3cb54`. This commit records the pre-existing pytest finding.
 PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/61
 Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/22
 Baseline: `main` @ `a8d7503` (merge-base).
 Russian: [issue-22-qa.ru.md](issue-22-qa.ru.md).
 Scope: read-only check of the two commits on this branch. Product code was not changed. The PR body was not edited.
 
-Machine: Python 3.12.3, pygame 2.6.1, pytest 9.2.0 for the suites below. The five core failures were re-run on pytest 8.3.5.
+Machine: Python 3.12.3, pygame 2.6.1. CI and the `origin/main` recheck use pytest 9.2.0 (`pip install -r requirements-dev.txt`).
 
 ## Verdict
 
 **PASS** (`73c2e87`).
 
-Old age in Demo/Colony chinchillas is biological age in sim-seconds. Each `ChinchillaAgent` builds its own `MortalitySystem` with `max_lifespan_age_s = 13500` (`15 * MATURITY_AGE_S`). `git diff origin/main -- src` is empty. Death is `old_age` at age 13500 at 1× and 10× and at `dt` of `1/12`, `0.25`, `1`, `2.5`, `10`, and an odd `0.07` s frame. A young animal with `lived_steps` above 20000 stays alive. Exhaustion and sleep deprivation still kill earlier. Unmet hunger and thirst still spend energy. Founders and a newborn do not share an `Agent` or a `MortalitySystem`. Both media scripts register `old_age`. The colony suite is green. The spec pair matches the code. One colony spec section still describes the old step budget; that residual does not change the measured behaviour.
+Old age in Demo/Colony chinchillas is biological age in sim-seconds. Each `ChinchillaAgent` builds its own `MortalitySystem` with `max_lifespan_age_s = 13500` (`15 * MATURITY_AGE_S`). `git diff origin/main -- src` is empty. Death is `old_age` at age 13500 at 1× and 10× and at `dt` of `1/12`, `0.25`, `1`, `2.5`, `10`, and an odd `0.07` s frame. A young animal with `lived_steps` above 20000 stays alive. Exhaustion and sleep deprivation still kill earlier. Unmet hunger and thirst still spend energy. Founders and a newborn do not share an `Agent` or a `MortalitySystem`. Both media scripts register `old_age`. The colony suite is green. The spec pair matches the code. One colony spec section still describes the old step budget; that residual does not change the measured behaviour. Five `pytest.approx` TypeErrors in the labile-layer tests are a known pre-existing failure on `origin/main` with pytest 9.2.0. They are not counted against this PR.
 
 ## Coverage
 
@@ -29,8 +29,8 @@ Old age in Demo/Colony chinchillas is biological age in sim-seconds. Each `Chinc
 | `tools/render_evolution_media.py`, `tools/render_promo_media.py` | Journal cause `old_age` |
 | `python3 -m pytest -q "Demo/Colony chinchillas/tests"` | **228 passed, 1 warning**, exit 0, 398.74 s |
 | `test_founders_do_not_die_of_exhaustion_at_10x` | Passed inside that run (not rerun) |
-| `python3 -m pytest -q tests` on pytest 9.2.0 | **5 failed, 900 passed, 5 skipped, 2 warnings**, exit 1, 584.79 s |
-| Same five tests on pytest 8.3.5 | **5 passed**, 1.67 s |
+| Known pre-existing `pytest.approx` TypeErrors | Not a PR #61 failure. Identical on `origin/main` @ `a8d7503` with pytest 9.2.0 |
+| CI run 42061921160 (pytest 9.2.0) | **5 failed, 2005 passed, 12 skipped**. The five failures are that known issue |
 | `git status` after the suites | Clean. `Demo/Colony chinchillas/logs/` is gitignored |
 | Spec pair and colony lifecycle docs | Numbers match. See the residual in section 6 |
 | PR #61 body | Contains `Closes #22` (English section and Russian section) |
@@ -112,7 +112,7 @@ The promo update in `tools/render_promo_media.py` was executed as written (energ
 
 Colony suite, from a clean tree: **228 passed, 1 warning**, exit 0, 398.74 s. The warning is pygame's `pkg_resources` deprecation. `test_founders_do_not_die_of_exhaustion_at_10x` is inside that file set and passed on this run, so it was not rerun.
 
-Root suite `python3 -m pytest -q tests` on pytest 9.2.0: **5 failed, 900 passed, 5 skipped, 2 warnings**, exit 1, 584.79 s. Every failure is `TypeError: pytest.approx() does not support nested data structures` in labile-snapshot comparisons:
+Known pre-existing issue. Not a failure of PR #61, and not fixed on this branch. CI run 42061921160 (pytest 9.2.0 installed from `requirements-dev.txt`) reports **5 failed, 2005 passed, 12 skipped, 25 warnings** in 1071.72 s. The five failures are `TypeError` from `pytest.approx()` on nested labile snapshots:
 
 - `tests/test_issue13_two_tier.py::test_feedback_is_idempotent_and_a_changed_rating_replaces`
 - `tests/test_issue13_two_tier.py::test_save_load_restores_labile_clock_and_config`
@@ -120,7 +120,9 @@ Root suite `python3 -m pytest -q tests` on pytest 9.2.0: **5 failed, 900 passed,
 - `tests/test_qa_pr37_labile_layer.py::test_feedback_idempotency_replacement_and_unknown_id`
 - `tests/test_qa_pr37_labile_layer.py::test_save_load_legacy_empty_and_decay_continues`
 
-`git diff origin/main -- tests` is empty, and `src/` is empty, so these tests are the same as `main`. The same five tests on pytest 8.3.5: **5 passed** in 1.67 s. This is the pytest 9.2 assertion API, not the lifespan change.
+`git diff origin/main --` those two test files is empty (blob hashes match), and `src/` is empty. A detached worktree of `origin/main` @ `a8d7503` run with the same pytest 9.2.0 fails those five tests with the same five TypeError strings as this branch: **5 failed** in 1.81 s on main and 1.66 s on the branch. The messages match CI, including the nested values `0.003`, `0.0029701495012475045`, `0.9335130352000004`, and `0.0028823683174569697`. They are not counted against this PR.
+
+An earlier local `python3 -m pytest -q tests` on pytest 9.2.0 saw the same five among **900 passed, 5 skipped, 2 warnings**, exit 1, 584.79 s. That command is only the root `tests/` tree. The full suite was not repeated locally. On pytest 8.3.5 the same five passed in 1.67 s, which is the older assertion API. The colony checklist does not depend on them.
 
 `git status` after both suites: clean working tree. `git status --short --ignored` shows `Demo/Colony chinchillas/logs/` ignored. No tracked log file changed.
 

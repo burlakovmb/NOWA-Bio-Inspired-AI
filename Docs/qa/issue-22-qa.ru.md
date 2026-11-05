@@ -1,19 +1,19 @@
 # QA issue #22 — старость колонии в сим-секундах
 
-Ветка: `team/issue-22-colony-lifespan-sim-seconds`. Проверен `73c2e87` (эта заметка — следующий коммит).
+Ветка: `team/issue-22-colony-lifespan-sim-seconds`. Проверен продуктовый коммит `73c2e87`. Первая QA-заметка — `3c3cb54`. Этот коммит фиксирует заранее существующее падение pytest.
 PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/61
 Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/22
 База: `main` @ `a8d7503` (merge-base).
 English: [issue-22-qa.en.md](issue-22-qa.en.md).
 Объём: чтение двух коммитов ветки, без правок продукта. Тело PR не редактировалось.
 
-Машина: Python 3.12.3, pygame 2.6.1, pytest 9.2.0 для наборов ниже. Пять падений ядра перезапущены на pytest 8.3.5.
+Машина: Python 3.12.3, pygame 2.6.1. CI и повтор на `origin/main` используют pytest 9.2.0 (`pip install -r requirements-dev.txt`).
 
 ## Вердикт
 
 **PASS** (`73c2e87`).
 
-Старость в Demo/Colony chinchillas — биологический возраст в сим-секундах. Каждый `ChinchillaAgent` создаёт свой `MortalitySystem` с `max_lifespan_age_s = 13500` (`15 * MATURITY_AGE_S`). `git diff origin/main -- src` пуст. Смерть — `old_age` в возрасте 13500 при 1× и 10× и при `dt` `1/12`, `0.25`, `1`, `2.5`, `10` и нечётном кадре `0.07` с. Молодая особь с `lived_steps` выше 20000 жива. Истощение и депривация сна по-прежнему убивают раньше. Неудовлетворённые голод и жажда по-прежнему тратят энергию. Основатели и новорождённый не делят `Agent` и `MortalitySystem`. Оба медиа-скрипта регистрируют `old_age`. Набор колонии зелёный. Пара спеки совпадает с кодом. Один раздел колониальной спеки всё ещё описывает старый бюджет шагов; на измеренное поведение это не влияет.
+Старость в Demo/Colony chinchillas — биологический возраст в сим-секундах. Каждый `ChinchillaAgent` создаёт свой `MortalitySystem` с `max_lifespan_age_s = 13500` (`15 * MATURITY_AGE_S`). `git diff origin/main -- src` пуст. Смерть — `old_age` в возрасте 13500 при 1× и 10× и при `dt` `1/12`, `0.25`, `1`, `2.5`, `10` и нечётном кадре `0.07` с. Молодая особь с `lived_steps` выше 20000 жива. Истощение и депривация сна по-прежнему убивают раньше. Неудовлетворённые голод и жажда по-прежнему тратят энергию. Основатели и новорождённый не делят `Agent` и `MortalitySystem`. Оба медиа-скрипта регистрируют `old_age`. Набор колонии зелёный. Пара спеки совпадает с кодом. Один раздел колониальной спеки всё ещё описывает старый бюджет шагов; на измеренное поведение это не влияет. Пять `TypeError` из `pytest.approx` в тестах labile-слоя — заранее известное падение на `origin/main` с pytest 9.2.0. Против этого PR они не считаются.
 
 ## Покрытие
 
@@ -29,8 +29,8 @@ English: [issue-22-qa.en.md](issue-22-qa.en.md).
 | `tools/render_evolution_media.py`, `tools/render_promo_media.py` | Причина в журнале `old_age` |
 | `python3 -m pytest -q "Demo/Colony chinchillas/tests"` | **228 passed, 1 warning**, выход 0, 398.74 с |
 | `test_founders_do_not_die_of_exhaustion_at_10x` | Прошёл внутри этого прогона (повтор не нужен) |
-| `python3 -m pytest -q tests` на pytest 9.2.0 | **5 failed, 900 passed, 5 skipped, 2 warnings**, выход 1, 584.79 с |
-| Те же пять тестов на pytest 8.3.5 | **5 passed**, 1.67 с |
+| Заранее известные `TypeError` из `pytest.approx` | Не падение PR #61. Те же на `origin/main` @ `a8d7503` с pytest 9.2.0 |
+| CI run 42061921160 (pytest 9.2.0) | **5 failed, 2005 passed, 12 skipped**. Эти пять — то известное падение |
 | `git status` после наборов | Чисто. `Demo/Colony chinchillas/logs/` в gitignore |
 | Пара спеки и документы цикла колонии | Числа совпадают. Остаток — в разделе 6 |
 | Тело PR #61 | Содержит `Closes #22` (английский и русский разделы) |
@@ -112,7 +112,7 @@ English: [issue-22-qa.en.md](issue-22-qa.en.md).
 
 Набор колонии с чистого дерева: **228 passed, 1 warning**, выход 0, 398.74 с. Предупреждение — deprecation `pkg_resources` у pygame. `test_founders_do_not_die_of_exhaustion_at_10x` входит в этот набор и прошёл, повтор не делался.
 
-Корневой набор `python3 -m pytest -q tests` на pytest 9.2.0: **5 failed, 900 passed, 5 skipped, 2 warnings**, выход 1, 584.79 с. Каждое падение — `TypeError: pytest.approx() does not support nested data structures` в сравнении снимков labile:
+Заранее известная проблема. Это не падение PR #61, и на этой ветке тесты не чинятся. CI run 42061921160 (pytest 9.2.0 из `requirements-dev.txt`) сообщает **5 failed, 2005 passed, 12 skipped, 25 warnings** за 1071.72 с. Пять падений — `TypeError` из `pytest.approx()` на вложенных снимках labile:
 
 - `tests/test_issue13_two_tier.py::test_feedback_is_idempotent_and_a_changed_rating_replaces`
 - `tests/test_issue13_two_tier.py::test_save_load_restores_labile_clock_and_config`
@@ -120,7 +120,9 @@ English: [issue-22-qa.en.md](issue-22-qa.en.md).
 - `tests/test_qa_pr37_labile_layer.py::test_feedback_idempotency_replacement_and_unknown_id`
 - `tests/test_qa_pr37_labile_layer.py::test_save_load_legacy_empty_and_decay_continues`
 
-`git diff origin/main -- tests` пуст, и `src/` пуст, поэтому эти тесты те же, что на `main`. Те же пять тестов на pytest 8.3.5: **5 passed** за 1.67 с. Это API утверждений pytest 9.2, не изменение срока жизни.
+`git diff origin/main --` для этих двух файлов тестов пуст (хеши blob совпадают), и `src/` пуст. Отсоединённый worktree `origin/main` @ `a8d7503` с тем же pytest 9.2.0 роняет те же пять тестов с теми же пятью строками TypeError, что и эта ветка: **5 failed** за 1.81 с на main и 1.66 с на ветке. Сообщения совпадают с CI, включая вложенные значения `0.003`, `0.0029701495012475045`, `0.9335130352000004` и `0.0028823683174569697`. Против этого PR они не считаются.
+
+Более ранний локальный `python3 -m pytest -q tests` на pytest 9.2.0 видел те же пять среди **900 passed, 5 skipped, 2 warnings**, выход 1, 584.79 с. Эта команда — только дерево `tests/` в корне. Полный набор локально не повторялся. На pytest 8.3.5 те же пять прошли за 1.67 с: это прежний API утверждений. Чеклист колонии от них не зависит.
 
 `git status` после обоих наборов: чистое дерево. `git status --short --ignored` показывает игнорируемый `Demo/Colony chinchillas/logs/`. Отслеживаемые логи не менялись.
 
