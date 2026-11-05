@@ -469,3 +469,151 @@ def test_runner_old_age_matches_at_nominal_1x_and_10x() -> None:
     assert abs(age_10x - COLONY_MAX_LIFESPAN_AGE_S) <= SimulationRunner.MAX_TICK_DT + 1e-6
     assert abs(age_1x - age_10x) <= SimulationRunner.MAX_TICK_DT + 1e-6
     assert steps_1x > steps_10x > 0
+
+
+def _genome_with_lifespan_factor(factor: float) -> GenomeVector:
+    genes = dict(GenomeVector.default().genes)
+    genes["lt_max_lifespan_factor"] = float(factor)
+    return GenomeVector(genes=genes, generation=0, lineage_id="lifespan-factor")
+
+
+def _walk_to_old_age(
+    dt: float,
+    genome: GenomeVector | None,
+) -> tuple[float, str, int, bool]:
+    """Age with ``_age_step`` until old age.
+
+    Returns age, cause, step count, and whether the animal was still alive
+    after passing the unscaled colony cap (13500 s).
+    """
+    agent = ChinchillaAgent(sex="F", rng_seed=1, age=0.0, genome=genome)
+    agent.energy = 0.9
+    agent.wakefulness.wakefulness = 0.2
+    agent.neuromodulators.cortisol = 0.05
+    agent.lived_steps = 3
+    cap = float(agent.mortality_system.max_lifespan_age_s)
+    alive_past_default_cap = False
+    limit = int(cap / dt) + 5
+    steps = 0
+    while not agent.mortality_system.is_dead() and steps < limit:
+        agent._age_step(dt)
+        steps += 1
+        if (
+            not agent.mortality_system.is_dead()
+            and float(agent.age) >= float(COLONY_MAX_LIFESPAN_AGE_S)
+        ):
+            alive_past_default_cap = True
+    assert agent.mortality_system.is_dead() is True
+    assert agent.lived_steps == 3
+    assert agent.mortality_system.max_lifespan_steps == COLONY_MAX_LIFESPAN_STEPS
+    return (
+        float(agent.age),
+        str(agent.mortality_system.cause_of_death),
+        steps,
+        alive_past_default_cap,
+    )
+
+
+def test_lifespan_factor_scales_old_age_and_matches_across_dt() -> None:
+    """Gene ``lt_max_lifespan_factor`` is a plain multiplier on the age cap.
+
+    0.5 dies at 6750 s, 2.0 is still alive at 13500 s and dies at 27000 s,
+    and 1.0 or no genome keeps 13500 s. The same sim-age is reached in a
+    different number of steps at dt 1 s and dt 10 s.
+    """
+    default_cap = float(COLONY_MAX_LIFESPAN_AGE_S)
+    cases: tuple[tuple[GenomeVector | None, float, bool], ...] = (
+        (None, default_cap, False),
+        (_genome_with_lifespan_factor(1.0), default_cap, False),
+        (_genome_with_lifespan_factor(0.5), default_cap * 0.5, False),
+        (_genome_with_lifespan_factor(2.0), default_cap * 2.0, True),
+    )
+    fine_dt = 1.0
+    coarse_dt = 10.0
+    for genome, cap, survives_default in cases:
+        fine_age, fine_cause, fine_steps, fine_alive = _walk_to_old_age(fine_dt, genome)
+        coarse_age, coarse_cause, coarse_steps, coarse_alive = _walk_to_old_age(
+            coarse_dt, genome
+        )
+        assert fine_cause == coarse_cause == "old_age"
+        assert cap <= fine_age < cap + fine_dt + 1e-6
+        assert cap <= coarse_age < cap + coarse_dt + 1e-6
+        assert abs(fine_age - coarse_age) <= coarse_dt + 1e-6
+        assert fine_steps != coarse_steps
+        assert fine_alive is survives_default
+        assert coarse_alive is survives_default
+
+
+def test_lifespan_factor_runner_matches_at_nominal_1x_and_10x() -> None:
+    """UI 1x and 10x kill at the individual's cap, with different decision counts."""
+    default_cap = float(COLONY_MAX_LIFESPAN_AGE_S)
+    cases: tuple[tuple[str, GenomeVector | None, float], ...] = (
+        ("none", None, default_cap),
+        ("one", _genome_with_lifespan_factor(1.0), default_cap),
+        ("half", _genome_with_lifespan_factor(0.5), default_cap * 0.5),
+        ("double", _genome_with_lifespan_factor(2.0), default_cap * 2.0),
+    )
+
+    def run(frame_dt: float, tag: str, genome: GenomeVector | None, cap: float) -> tuple[float, int, str, int]:
+        runner = SimulationRunner(death_journal_path=f"/tmp/colony-lifespan-factor-{tag}.jsonl")
+        agent = ChinchillaAgent(
+            sex="F",
+            rng_seed=11,
+            age=cap - 1.0,
+            genome=genome,
+        )
+        agent.energy = 0.9
+        agent.wakefulness.wakefulness = 0.2
+        assert agent.mortality_system.max_lifespan_age_s == cap
+        assert agent.mortality_system.max_lifespan_steps == COLONY_MAX_LIFESPAN_STEPS
+        runner.add_agent(agent)
+        for _ in range(40):
+            if agent.mortality_system.is_dead():
+                break
+            runner.tick(frame_dt)
+        assert agent.mortality_system.is_dead() is True
+        return (
+            float(agent.age),
+            int(agent.lived_steps),
+            str(agent.mortality_system.cause_of_death),
+            id(agent.mortality_system),
+        )
+
+    systems: list[int] = []
+    for tag, genome, cap in cases:
+        age_1x, steps_1x, cause_1x, system_1x = run(UI_DT_1X, f"{tag}-1x", genome, cap)
+        age_10x, steps_10x, cause_10x, system_10x = run(UI_DT_10X, f"{tag}-10x", genome, cap)
+        assert cause_1x == cause_10x == "old_age"
+        assert abs(age_1x - cap) <= UI_DT_1X + 1e-6
+        assert abs(age_10x - cap) <= SimulationRunner.MAX_TICK_DT + 1e-6
+        assert abs(age_1x - age_10x) <= SimulationRunner.MAX_TICK_DT + 1e-6
+        assert steps_1x > steps_10x > 0
+        systems.extend((system_1x, system_10x))
+    assert len(set(systems)) == len(systems)
+
+
+def test_newborn_lifespan_cap_follows_its_own_genome() -> None:
+    mother = ChinchillaAgent(
+        sex="F",
+        rng_seed=3,
+        genome=_genome_with_lifespan_factor(2.0),
+        name="G0A1SF",
+    )
+    father = ChinchillaAgent(
+        sex="M",
+        rng_seed=4,
+        genome=_genome_with_lifespan_factor(0.5),
+        name="G0A2SM",
+    )
+    mother.colony = [mother, father]
+    father.colony = mother.colony
+    child = mother._create_offspring(father)
+
+    assert child.genome is not None
+    child_factor = float(child.genome.genes["lt_max_lifespan_factor"])
+    minds = (mother, father, child)
+    assert len({id(agent.mortality_system) for agent in minds}) == 3
+    assert mother.mortality_system.max_lifespan_age_s == float(COLONY_MAX_LIFESPAN_AGE_S) * 2.0
+    assert father.mortality_system.max_lifespan_age_s == float(COLONY_MAX_LIFESPAN_AGE_S) * 0.5
+    assert child.mortality_system.max_lifespan_age_s == float(COLONY_MAX_LIFESPAN_AGE_S) * child_factor
+    assert child.mortality_system.max_lifespan_steps == COLONY_MAX_LIFESPAN_STEPS

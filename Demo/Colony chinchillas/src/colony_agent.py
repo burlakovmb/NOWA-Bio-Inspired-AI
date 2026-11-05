@@ -144,6 +144,19 @@ def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def _colony_max_lifespan_age_s(genome: GenomeVector | None) -> float:
+    """Old-age cap in sim-seconds. A missing genome keeps the colony default.
+
+    ``lt_max_lifespan_factor`` is a plain multiplier (registry range 0.5..2.0).
+    """
+    factor = 1.0
+    if genome is not None:
+        factor = float(
+            (getattr(genome, "genes", {}) or {}).get("lt_max_lifespan_factor", 1.0)
+        )
+    return float(COLONY_MAX_LIFESPAN_AGE_S) * factor
+
+
 class ChinchillaAgent(Agent):
     """Chinchilla entity with full NOWA cognitive stack and colony behaviors."""
 
@@ -270,7 +283,7 @@ class ChinchillaAgent(Agent):
 
         self.mortality_system: MortalitySystem = MortalitySystem(
             max_lifespan_steps=COLONY_MAX_LIFESPAN_STEPS,
-            max_lifespan_age_s=COLONY_MAX_LIFESPAN_AGE_S,
+            max_lifespan_age_s=_colony_max_lifespan_age_s(self.genome),
             senescence_start_fraction=0.75,
             senescence_vitality_loss_rate=0.00018,
             critical_energy_threshold=0.08,
@@ -2017,6 +2030,7 @@ class ChinchillaAgent(Agent):
                 )
                 child_genome = child_genome.mutate(rate=0.05, rng=self._rng)
                 self.genome = child_genome
+                self.mortality_system.max_lifespan_age_s = _colony_max_lifespan_age_s(self.genome)
                 mother_id = str(getattr(mother, "agent_id", "") or "")
                 father_id = str(getattr(father, "agent_id", "") or "")
                 mother_name = str(getattr(mother, "name", "") or mother_id)
