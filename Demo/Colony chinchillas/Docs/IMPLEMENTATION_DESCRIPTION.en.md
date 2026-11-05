@@ -34,7 +34,7 @@ Interface: `src/gui.py` is the canonical launch; `src/colony_gui/app.py` is the 
 
 The profile is loaded by directory priority: `Demo/Colony chinchillas/datasets`, `Demo/Colony chinchillas/Datasets`, then the repository-root `datasets`. It contains base abilities, unconditioned reflexes, and homeostatic habits.
 
-From `src/config_colony.py`: `MATURITY_AGE_S = 900.0`, `GESTATION_S = 300.0`, `HEAT_CYCLE_LENGTH_S = 600.0`, `ESTRUS_DURATION_S = 180.0`, `REFILL_DAY_S = 600.0`, `COLONY_MAX_LIFESPAN_AGE_S = 13500.0` (15 × maturity), `COLONY_MAX_LIFESPAN_STEPS = 20000` (snapshots and health-index normalisation only). Each `ChinchillaAgent` passes `biological_age_s=self.age` into `MortalitySystem.update`. Death arises from physiology (`exhaustion`, `sleep_deprivation`) and from ageing dynamics (`old_age` at the age cap, `senescence`).
+From `src/config_colony.py`: `MATURITY_AGE_S = 900.0`, `GESTATION_S = 300.0`, `HEAT_CYCLE_LENGTH_S = 600.0`, `ESTRUS_DURATION_S = 180.0`, `REFILL_DAY_S = 600.0`, `COLONY_MAX_LIFESPAN_AGE_S = 13500.0` (15 × maturity), `COLONY_MAX_LIFESPAN_STEPS = 20000` (snapshots and health-index normalisation only). Each `ChinchillaAgent` sets `MortalitySystem.max_lifespan_age_s` to `COLONY_MAX_LIFESPAN_AGE_S * genome.genes.get("lt_max_lifespan_factor", 1.0)` and passes `biological_age_s=self.age` into `MortalitySystem.update`. Death arises from physiology (`exhaustion`, `sleep_deprivation`) and from ageing dynamics (`old_age` at the individual age cap, `senescence`).
 
 ### 5. Limits on the interpretation of a run
 

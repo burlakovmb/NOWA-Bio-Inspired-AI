@@ -34,7 +34,7 @@ English version: [IMPLEMENTATION_DESCRIPTION.en.md](IMPLEMENTATION_DESCRIPTION.e
 
 Профиль загружается по приоритету каталогов: `Demo/Colony chinchillas/datasets`, `Demo/Colony chinchillas/Datasets`, затем `datasets` корня репозитория. Он содержит базовые способности, безусловные рефлексы и гомеостатические привычки.
 
-Из `src/config_colony.py`: `MATURITY_AGE_S = 900.0`, `GESTATION_S = 300.0`, `HEAT_CYCLE_LENGTH_S = 600.0`, `ESTRUS_DURATION_S = 180.0`, `REFILL_DAY_S = 600.0`, `COLONY_MAX_LIFESPAN_AGE_S = 13500.0` (15 × зрелость), `COLONY_MAX_LIFESPAN_STEPS = 20000` (только снимки и нормализация индекса здоровья). Каждый `ChinchillaAgent` передаёт в `MortalitySystem.update` `biological_age_s=self.age`. Смерть возникает из физиологии (`exhaustion`, `sleep_deprivation`) и динамики старения (`old_age` по возрастному пределу, `senescence`).
+Из `src/config_colony.py`: `MATURITY_AGE_S = 900.0`, `GESTATION_S = 300.0`, `HEAT_CYCLE_LENGTH_S = 600.0`, `ESTRUS_DURATION_S = 180.0`, `REFILL_DAY_S = 600.0`, `COLONY_MAX_LIFESPAN_AGE_S = 13500.0` (15 × зрелость), `COLONY_MAX_LIFESPAN_STEPS = 20000` (только снимки и нормализация индекса здоровья). Каждый `ChinchillaAgent` задаёт `MortalitySystem.max_lifespan_age_s` как `COLONY_MAX_LIFESPAN_AGE_S * genome.genes.get("lt_max_lifespan_factor", 1.0)` и передаёт в `MortalitySystem.update` `biological_age_s=self.age`. Смерть возникает из физиологии (`exhaustion`, `sleep_deprivation`) и динамики старения (`old_age` по индивидуальному возрастному пределу, `senescence`).
 
 ### 5. Ограничения интерпретации прогона
 
