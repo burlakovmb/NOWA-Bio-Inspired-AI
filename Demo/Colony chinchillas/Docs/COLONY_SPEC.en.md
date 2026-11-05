@@ -44,7 +44,7 @@ The individual's homeostatic gate may cancel a cognitively chosen action under c
 
 ### 4. Observables and life-cycle parameters
 
-Sexual maturity is 900 units of model time; gestation is 300; oestrous-cycle length is 600; estrus is 180; refill of food, hay, and water to 1.0 occurs every 600 units; the old-age step budget is 20 000. Acceptance of mating requires female estrus. Death from old age in colony mode is counted by the step budget; exhaustion and sleep deprivation remain physiological causes. The death journal stores the cause, model time, energy, wakefulness, stress, and cortisol.
+Sexual maturity is 900 units of model time; gestation is 300; oestrous-cycle length is 600; estrus is 180; refill of food, hay, and water to 1.0 occurs every 600 units; old age is capped at `COLONY_MAX_LIFESPAN_AGE_S` (13 500 s, 15 × maturity). `COLONY_MAX_LIFESPAN_STEPS` (20 000) remains for snapshots and health-index normalisation only. Acceptance of mating requires female estrus. Death from old age follows biological age in sim-seconds, not decision count; exhaustion and sleep deprivation remain physiological causes. The death journal stores the cause, model time, energy, wakefulness, stress, and cortisol.
 
 ### 5. Reproduction
 
