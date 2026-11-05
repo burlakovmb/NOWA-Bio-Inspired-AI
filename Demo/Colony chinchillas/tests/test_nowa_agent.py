@@ -8,7 +8,7 @@ from colony_agent import (
     ChinchillaAgent,
     WHEEL_RUN_MAX_CONTINUOUS_S,
 )
-from config_colony import COLONY_MAX_LIFESPAN_STEPS
+from config_colony import COLONY_MAX_LIFESPAN_AGE_S, COLONY_MAX_LIFESPAN_STEPS
 from shared_resources import SharedResources
 
 
@@ -178,10 +178,11 @@ def test_tc13_unconditioned_reflex_can_override_selected_action() -> None:
     assert agent.current_action == "hide"
 
 
-def test_tc14_colony_uses_extended_lifespan_steps() -> None:
+def test_tc14_colony_old_age_uses_sim_seconds() -> None:
     agent = ChinchillaAgent(sex="F")
+    assert agent.mortality_system.max_lifespan_age_s == COLONY_MAX_LIFESPAN_AGE_S
+    # Step field remains for snapshots. It is not the old-age criterion.
     assert agent.mortality_system.max_lifespan_steps == COLONY_MAX_LIFESPAN_STEPS
-    assert agent.mortality_system.max_lifespan_age_s is None
 
 
 def test_tc15_unstuck_position_moves_agent_after_timeout() -> None:
@@ -419,20 +420,32 @@ def test_tc27_homeostatic_policy_prioritizes_more_urgent_need() -> None:
     assert resolved == "drink"
 
 
-def test_tc28_mortality_does_not_apply_seconds_based_old_age_cap() -> None:
-    agent = ChinchillaAgent(sex="F")
-    agent.resources = SharedResources()
-    agent.energy = 1.0
-    agent.wakefulness.wakefulness = 0.2
+def test_tc28_old_age_follows_biological_age_not_decision_steps() -> None:
+    young = ChinchillaAgent(sex="F")
+    young.resources = SharedResources()
+    young.energy = 1.0
+    young.wakefulness.wakefulness = 0.2
+    young.lived_steps = COLONY_MAX_LIFESPAN_STEPS + 50
+    young.age = 10.0
 
-    # Colony mode should not enforce old-age death by age-in-seconds only.
-    agent.lived_steps = 10
-    agent.age = float(COLONY_MAX_LIFESPAN_STEPS * 5)
+    young._age_step(0.1)
 
-    agent._age_step(0.1)
+    assert young.mortality_system.is_dead() is False
+    assert abs(young.age - 10.1) < 1e-9
 
-    assert agent.mortality_system.is_dead() is False
-    assert agent.age > 0.0
+    old = ChinchillaAgent(sex="M")
+    old.resources = SharedResources()
+    old.energy = 1.0
+    old.wakefulness.wakefulness = 0.2
+    old.lived_steps = 1
+    old.age = COLONY_MAX_LIFESPAN_AGE_S - 0.05
+
+    old._age_step(0.1)
+
+    assert old.mortality_system.is_dead() is True
+    assert old.mortality_system.cause_of_death == "old_age"
+    assert old.lived_steps == 1
+    assert old.age >= COLONY_MAX_LIFESPAN_AGE_S
 
 
 def test_tc29_sleep_has_priority_over_food_and_water_when_critical() -> None:
@@ -464,3 +477,26 @@ def test_tc30_sleep_recovery_runs_before_sleep_deprivation_mortality() -> None:
 
     assert agent.mortality_system.is_dead() is False
     assert float(agent.wakefulness.wakefulness) < 0.95
+
+
+def test_tc31_each_chinchilla_has_its_own_nowa_core() -> None:
+    mother = ChinchillaAgent(sex="F", rng_seed=1)
+    father = ChinchillaAgent(sex="M", rng_seed=2)
+    mother.colony = [mother, father]
+    father.colony = mother.colony
+    child = mother._create_offspring(father)
+
+    minds = (mother, father, child)
+    assert len({agent.agent_id for agent in minds}) == 3
+    for attr in (
+        "hippocampus",
+        "cortex",
+        "selector",
+        "sleep_manager",
+        "intent_memory",
+        "neuromodulators",
+        "affective_space",
+        "wakefulness",
+        "mortality_system",
+    ):
+        assert len({id(getattr(agent, attr)) for agent in minds}) == 3, attr

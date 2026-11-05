@@ -42,6 +42,7 @@ from agent_knowledge import (
     PublicState,
 )
 from config_colony import (
+    COLONY_MAX_LIFESPAN_AGE_S,
     COLONY_MAX_LIFESPAN_STEPS,
     GESTATION_S,
     JUVENILE_BLOCKED_OFFERS,
@@ -269,6 +270,7 @@ class ChinchillaAgent(Agent):
 
         self.mortality_system: MortalitySystem = MortalitySystem(
             max_lifespan_steps=COLONY_MAX_LIFESPAN_STEPS,
+            max_lifespan_age_s=COLONY_MAX_LIFESPAN_AGE_S,
             senescence_start_fraction=0.75,
             senescence_vitality_loss_rate=0.00018,
             critical_energy_threshold=0.08,

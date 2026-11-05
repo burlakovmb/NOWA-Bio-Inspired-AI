@@ -26,7 +26,11 @@ from colony_gui.app import format_speed_status_line
 from colony_gui.colony_gui import ColonyGUI
 from colony_gui.i18n import reset_language, set_language
 from colony_storage import ColonyStorage
-from config_colony import UNMET_THIRST_ENERGY_PER_S
+from config_colony import (
+    COLONY_MAX_LIFESPAN_AGE_S,
+    COLONY_MAX_LIFESPAN_STEPS,
+    UNMET_THIRST_ENERGY_PER_S,
+)
 from genome import GenomeVector
 from shared_resources import SharedResources
 from simulation_runner import SimulationRunner
@@ -389,3 +393,79 @@ def test_speed_line_shows_actual_rate_when_sim_lags() -> None:
         assert "факт x2.5" in russian
     finally:
         reset_language()
+
+
+def _age_until_old_age(dt: float) -> tuple[float, str, int]:
+    """Walk biological age with ``_age_step`` until old age.
+
+    ``_age_step`` is the colony clock that passes ``biological_age_s``.
+    It does not increment ``lived_steps``, so equal ages across ``dt``
+    are not an accident of equal decision counts.
+    """
+    agent = ChinchillaAgent(sex="F", rng_seed=1, age=0.0)
+    agent.energy = 0.9
+    agent.wakefulness.wakefulness = 0.2
+    agent.neuromodulators.cortisol = 0.05
+    agent.lived_steps = 3
+    cap = float(agent.mortality_system.max_lifespan_age_s)
+    limit = int(cap / dt) + 3
+    steps = 0
+    while not agent.mortality_system.is_dead() and steps < limit:
+        agent._age_step(dt)
+        steps += 1
+    assert agent.mortality_system.is_dead() is True
+    assert agent.lived_steps == 3
+    return float(agent.age), str(agent.mortality_system.cause_of_death), steps
+
+
+def test_old_age_lifespan_matches_across_dt() -> None:
+    cap = float(COLONY_MAX_LIFESPAN_AGE_S)
+    fine_dt = 1.0
+    coarse_dt = 10.0
+    fine_age, fine_cause, fine_steps = _age_until_old_age(fine_dt)
+    coarse_age, coarse_cause, coarse_steps = _age_until_old_age(coarse_dt)
+
+    assert fine_cause == coarse_cause == "old_age"
+    assert cap <= fine_age < cap + fine_dt + 1e-6
+    assert cap <= coarse_age < cap + coarse_dt + 1e-6
+    assert abs(fine_age - coarse_age) <= coarse_dt + 1e-6
+    assert fine_steps != coarse_steps
+    assert fine_steps < COLONY_MAX_LIFESPAN_STEPS
+    assert coarse_steps < COLONY_MAX_LIFESPAN_STEPS
+
+
+def test_runner_old_age_matches_at_nominal_1x_and_10x() -> None:
+    """UI frame at 1x is 1/12 s. A 10x frame is 2.5 s and is split.
+
+    Death is the first substep whose biological age reaches the cap.
+    The two speeds take different decision counts for that same second.
+    """
+
+    def run(frame_dt: float, tag: str) -> tuple[float, int, str]:
+        runner = SimulationRunner(death_journal_path=f"/tmp/colony-lifespan-{tag}.jsonl")
+        agent = ChinchillaAgent(
+            sex="F",
+            rng_seed=11,
+            age=COLONY_MAX_LIFESPAN_AGE_S - 1.0,
+        )
+        agent.energy = 0.9
+        agent.wakefulness.wakefulness = 0.2
+        runner.add_agent(agent)
+        for _ in range(30):
+            if agent.mortality_system.is_dead():
+                break
+            runner.tick(frame_dt)
+        assert agent.mortality_system.is_dead() is True
+        return (
+            float(agent.age),
+            int(agent.lived_steps),
+            str(agent.mortality_system.cause_of_death),
+        )
+
+    age_1x, steps_1x, cause_1x = run(UI_DT_1X, "1x")
+    age_10x, steps_10x, cause_10x = run(UI_DT_10X, "10x")
+    assert cause_1x == cause_10x == "old_age"
+    assert abs(age_1x - COLONY_MAX_LIFESPAN_AGE_S) <= UI_DT_1X + 1e-6
+    assert abs(age_10x - COLONY_MAX_LIFESPAN_AGE_S) <= SimulationRunner.MAX_TICK_DT + 1e-6
+    assert abs(age_1x - age_10x) <= SimulationRunner.MAX_TICK_DT + 1e-6
+    assert steps_1x > steps_10x > 0
