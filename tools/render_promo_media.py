@@ -207,14 +207,13 @@ def simulate_promo_lineage():
     Founders are constructed without a display name, so ``_next_generated_name``
     assigns ``G{generation}A{index}S{sex}``. Births go through
     ``send_social_offer`` and ``SimulationRunner.run_for``. Two founders then
-    die through ``MortalitySystem.update`` (old age at the sim-second cap)
+    die through ``MortalitySystem.update`` (old age at that animal's cap)
     and ``SimulationRunner``'s death registration. No display name
     is passed in.
     """
 
-    from colony_agent import ChinchillaAgent
+    from colony_agent import ChinchillaAgent, colony_scripted_old_age_s
     from colony_gui.config import is_formatted_name
-    from config_colony import COLONY_MAX_LIFESPAN_AGE_S
     from simulation_runner import SimulationRunner
 
     ChinchillaAgent._generation_name_counters.clear()
@@ -260,7 +259,7 @@ def simulate_promo_lineage():
             wakefulness=0.2,
             lived_steps=int(getattr(agent, "lived_steps", 0) or 0),
             cortisol_mean=0.1,
-            biological_age_s=max(float(agent.age), float(COLONY_MAX_LIFESPAN_AGE_S)),
+            biological_age_s=colony_scripted_old_age_s(agent),
             dt_s=1.0,
         )
     for agent_id in runner.swarm.check_mortality():

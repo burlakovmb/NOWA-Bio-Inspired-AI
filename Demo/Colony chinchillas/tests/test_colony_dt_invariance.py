@@ -21,6 +21,7 @@ from colony_agent import (
     THIRST_CRITICAL_THRESHOLD,
     THIRST_NEED_THRESHOLD,
     ChinchillaAgent,
+    colony_scripted_old_age_s,
 )
 from colony_gui.app import format_speed_status_line
 from colony_gui.colony_gui import ColonyGUI
@@ -617,3 +618,72 @@ def test_newborn_lifespan_cap_follows_its_own_genome() -> None:
     assert father.mortality_system.max_lifespan_age_s == float(COLONY_MAX_LIFESPAN_AGE_S) * 0.5
     assert child.mortality_system.max_lifespan_age_s == float(COLONY_MAX_LIFESPAN_AGE_S) * child_factor
     assert child.mortality_system.max_lifespan_steps == COLONY_MAX_LIFESPAN_STEPS
+
+
+def test_scripted_old_age_uses_each_agents_cap() -> None:
+    """Media deaths use the individual's cap, so a factor above 1.0 still dies.
+
+    The evolution script used to pass the unscaled 13500 s. That is below a
+    doubled cap, so the call registered no death. Promo founders have no
+    genome; the same helper keeps their cap at 13500 s.
+    """
+    default_cap = float(COLONY_MAX_LIFESPAN_AGE_S)
+    saved_random = random.getstate()
+    saved_name_index = ChinchillaAgent._name_index
+    saved_name_counters = dict(ChinchillaAgent._generation_name_counters)
+    try:
+        _assert_scripted_old_age_kills(default_cap)
+    finally:
+        random.setstate(saved_random)
+        ChinchillaAgent._name_index = saved_name_index
+        ChinchillaAgent._generation_name_counters.clear()
+        ChinchillaAgent._generation_name_counters.update(saved_name_counters)
+
+
+def _assert_scripted_old_age_kills(default_cap: float) -> None:
+    import sys
+    from pathlib import Path
+
+    long_lived = ChinchillaAgent(
+        sex="F",
+        age=250.0,
+        genome=_genome_with_lifespan_factor(2.0),
+        rng_seed=1,
+    )
+    short_lived = ChinchillaAgent(
+        sex="M",
+        age=250.0,
+        genome=_genome_with_lifespan_factor(0.5),
+        rng_seed=2,
+    )
+    plain = ChinchillaAgent(sex="F", age=250.0, rng_seed=3)
+    for agent in (long_lived, short_lived, plain):
+        agent.lived_steps = 17
+        agent.energy = 0.8
+
+    assert colony_scripted_old_age_s(long_lived) == default_cap * 2.0
+    assert colony_scripted_old_age_s(short_lived) == default_cap * 0.5
+    assert colony_scripted_old_age_s(plain) == default_cap
+    assert default_cap < float(long_lived.mortality_system.max_lifespan_age_s)
+
+    tools = Path(__file__).resolve().parents[3] / "tools"
+    saved_path = list(sys.path)
+    sys.path.insert(0, str(tools))
+    try:
+        import render_evolution_media
+    finally:
+        sys.path[:] = saved_path
+
+    runner = SimulationRunner(death_journal_path="/tmp/colony-scripted-old-age.jsonl")
+    for agent in (long_lived, short_lived, plain):
+        runner.add_agent(agent)
+    render_evolution_media._kill_oldest(runner, [long_lived, short_lived, plain])
+
+    assert runner.agents == []
+    memorials = runner.death_registry.get_all_memorials()
+    assert len(memorials) == 3
+    assert {memorial.cause_of_death for memorial in memorials} == {"old_age"}
+    for agent in (long_lived, short_lived, plain):
+        assert agent.age == 250.0
+        assert agent.lived_steps == 17
+        assert agent.mortality_system.cause_of_death == "old_age"

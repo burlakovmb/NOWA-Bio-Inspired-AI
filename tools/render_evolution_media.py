@@ -94,7 +94,7 @@ def _breed_wave(runner, generation: int) -> list:
 
 
 def _kill_oldest(runner, agents: list) -> None:
-    from config_colony import COLONY_MAX_LIFESPAN_AGE_S
+    from colony_agent import colony_scripted_old_age_s
 
     for agent in agents:
         if agent not in runner.agents:
@@ -104,7 +104,7 @@ def _kill_oldest(runner, agents: list) -> None:
             wakefulness=0.2,
             lived_steps=int(getattr(agent, "lived_steps", 0) or 0),
             cortisol_mean=0.1,
-            biological_age_s=max(float(agent.age), float(COLONY_MAX_LIFESPAN_AGE_S)),
+            biological_age_s=colony_scripted_old_age_s(agent),
             dt_s=1.0,
         )
     for agent_id in list(runner.swarm.check_mortality()):

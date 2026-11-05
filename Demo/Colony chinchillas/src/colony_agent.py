@@ -157,6 +157,19 @@ def _colony_max_lifespan_age_s(genome: GenomeVector | None) -> float:
     return float(COLONY_MAX_LIFESPAN_AGE_S) * factor
 
 
+def colony_scripted_old_age_s(agent: object) -> float:
+    """Simulated age that meets this animal's own old-age cap.
+
+    Media scripts pass the result as ``biological_age_s``. They do not
+    write it back onto ``agent.age``.
+    """
+    system = getattr(agent, "mortality_system", None)
+    cap = getattr(system, "max_lifespan_age_s", None)
+    if cap is None:
+        cap = _colony_max_lifespan_age_s(getattr(agent, "genome", None))
+    return max(float(getattr(agent, "age", 0.0)), float(cap))
+
+
 class ChinchillaAgent(Agent):
     """Chinchilla entity with full NOWA cognitive stack and colony behaviors."""
 
