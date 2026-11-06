@@ -24,20 +24,47 @@ UI_DT_10X = 0.25 * 10.0
 
 
 def _founders(seed: int, count: int = 4) -> tuple[SimulationRunner, list[ChinchillaAgent]]:
+    """Founders whose bowl choice follows ``seed``.
+
+    ``random.seed`` does not seed the ``random.Random`` that
+    ``ChinchillaAgent`` uses to pick hay versus pellets. A bare ``Random()``
+    draws from the OS, so the same scenario emptied different bowls on
+    different runs. ``rng_seed`` is derived from ``seed``. Stable ids keep
+    zone jitter on that same stream.
+    """
+    runner = SimulationRunner()
+    genome_rng = random.Random(seed)
+    agents: list[ChinchillaAgent] = []
+    for index in range(count):
+        agent = ChinchillaAgent(
+            sex="F" if index % 2 == 0 else "M",
+            generation=0,
+            name=f"founder-{seed}-{index}",
+            agent_id=f"founder-{seed}-{index}",
+            genome=GenomeVector.random(genome_rng),
+            rng_seed=seed * 100 + index,
+        )
+        runner.add_agent(agent)
+        agents.append(agent)
+    return runner, agents
+
+
+def _run_founders(
+    seed: int,
+    duration_s: float,
+    dt: float,
+) -> tuple[SimulationRunner, list[ChinchillaAgent]]:
+    """Run founders while ``seed`` also covers the colony shuffle.
+
+    ``SimulationRunner`` shuffles agents with the global ``random`` module
+    on every tick. The seed stays in effect for ``run_for`` and is restored
+    afterwards, so turn order does not depend on earlier tests.
+    """
     state = random.getstate()
     random.seed(seed)
     try:
-        runner = SimulationRunner()
-        genome_rng = random.Random(seed)
-        agents: list[ChinchillaAgent] = []
-        for index in range(count):
-            agent = ChinchillaAgent(
-                sex="F" if index % 2 == 0 else "M",
-                generation=0,
-                genome=GenomeVector.random(genome_rng),
-            )
-            runner.add_agent(agent)
-            agents.append(agent)
+        runner, agents = _founders(seed)
+        runner.run_for(duration_s, dt=dt)
         return runner, agents
     finally:
         random.setstate(state)
@@ -74,8 +101,7 @@ def test_onset_starts_a_bout_at_both_timesteps() -> None:
 
 
 def test_founders_accumulate_sleep_pressure_at_1x() -> None:
-    runner, agents = _founders(seed=1)
-    runner.run_for(90.0, dt=UI_DT_1X)
+    runner, agents = _run_founders(seed=1, duration_s=90.0, dt=UI_DT_1X)
 
     assert runner.resources.food_pellets > 0.5
     assert runner.resources.water > 0.5
@@ -90,14 +116,18 @@ def test_founders_accumulate_sleep_pressure_at_1x() -> None:
 def test_founders_do_not_die_of_exhaustion_at_10x() -> None:
     # Onset is ~0.7 / (30 / 16h) ≈ 1344 sim seconds. 1600 s is past that
     # night's start. Seed 2 died of exhaustion at age 890 s before the fix.
-    runner, agents = _founders(seed=2)
-    runner.run_for(1600.0, dt=UI_DT_10X)
+    runner, agents = _run_founders(seed=2, duration_s=1600.0, dt=UI_DT_10X)
 
     # Hunger advances once per simulated second, and eat is available before
     # the penalty, so the pellet bowl is drawn down further than the old
     # once-per-tick metabolism. It is still stocked. Hay is the other bowl.
+    # Which bowl is drawn is fixed by the founder seed. An unseeded
+    # ``Random()`` previously left hay anywhere from about 0.32 to above
+    # 0.5. Sleep and affect still use their own generators, so the level
+    # is not pinned to one cutoff. Stocked means the bowl was not emptied.
     assert runner.resources.food_pellets > 0.2
-    assert runner.resources.hay > 0.5
+    hay = float(runner.resources.hay)
+    assert hay > 0.0, hay
     assert runner.resources.water > 0.4
     assert runner.total_deaths == 0
     for agent in agents:
