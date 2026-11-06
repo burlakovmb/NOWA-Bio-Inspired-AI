@@ -42,6 +42,7 @@ from agent_knowledge import (
     PublicState,
 )
 from config_colony import (
+    COLONY_MAX_LIFESPAN_AGE_S,
     COLONY_MAX_LIFESPAN_STEPS,
     GESTATION_S,
     JUVENILE_BLOCKED_OFFERS,
@@ -141,6 +142,32 @@ def _host_dt(dt: float) -> float:
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def _colony_max_lifespan_age_s(genome: GenomeVector | None) -> float:
+    """Old-age cap in sim-seconds. A missing genome keeps the colony default.
+
+    ``lt_max_lifespan_factor`` is a plain multiplier (registry range 0.5..2.0).
+    """
+    factor = 1.0
+    if genome is not None:
+        factor = float(
+            (getattr(genome, "genes", {}) or {}).get("lt_max_lifespan_factor", 1.0)
+        )
+    return float(COLONY_MAX_LIFESPAN_AGE_S) * factor
+
+
+def colony_scripted_old_age_s(agent: object) -> float:
+    """Simulated age that meets this animal's own old-age cap.
+
+    Media scripts pass the result as ``biological_age_s``. They do not
+    write it back onto ``agent.age``.
+    """
+    system = getattr(agent, "mortality_system", None)
+    cap = getattr(system, "max_lifespan_age_s", None)
+    if cap is None:
+        cap = _colony_max_lifespan_age_s(getattr(agent, "genome", None))
+    return max(float(getattr(agent, "age", 0.0)), float(cap))
 
 
 class ChinchillaAgent(Agent):
@@ -269,6 +296,7 @@ class ChinchillaAgent(Agent):
 
         self.mortality_system: MortalitySystem = MortalitySystem(
             max_lifespan_steps=COLONY_MAX_LIFESPAN_STEPS,
+            max_lifespan_age_s=_colony_max_lifespan_age_s(self.genome),
             senescence_start_fraction=0.75,
             senescence_vitality_loss_rate=0.00018,
             critical_energy_threshold=0.08,
@@ -2015,6 +2043,7 @@ class ChinchillaAgent(Agent):
                 )
                 child_genome = child_genome.mutate(rate=0.05, rng=self._rng)
                 self.genome = child_genome
+                self.mortality_system.max_lifespan_age_s = _colony_max_lifespan_age_s(self.genome)
                 mother_id = str(getattr(mother, "agent_id", "") or "")
                 father_id = str(getattr(father, "agent_id", "") or "")
                 mother_name = str(getattr(mother, "name", "") or mother_id)
