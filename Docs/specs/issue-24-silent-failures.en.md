@@ -4,7 +4,7 @@ Russian: [issue-24-silent-failures.ru.md](issue-24-silent-failures.ru.md)
 
 Closes #24. PR #62. Related: #15 (broad exception handlers).
 
-Touches the cognitive **core** (`src/mortality.py`, `src/swarm.py`) and the **Colony chinchillas** demo host (`colony_agent.py`, `simulation_runner.py`, `colony_swarm_bridge.py`). Implementation commit: `f80a28a`.
+Touches the cognitive **core** (`src/mortality.py`, `src/swarm.py`) and the **Colony chinchillas** demo host (`colony_agent.py`, `colony_storage.py`, `simulation_runner.py`, `colony_swarm_bridge.py`). Implementation commits: `f80a28a`, `b7d3ab2`.
 
 ---
 
@@ -18,13 +18,23 @@ Three silent failure modes were confirmed by static code review (issue #24, audi
 | **Bare `except` on mortality update** | Any exception in `MortalitySystem.update` was swallowed; the agent could stay alive indefinitely. |
 | **Non-transactional `add_agent`** | After `self.agents.append(...)`, a failed swarm `add_agent` led the runner fallback to append again → duplicates only in the colony list, not in the swarm, invisible to mortality cleanup. |
 
+A follow-up gap: colony save/load did not persist genomes or conception snapshots, so a reload could silently lose inheritance state mid-gestation.
+
 ---
 
 ## 2. Decision and rationale
 
-**Decision:** Fix all three paths with explicit logging, a conception-time father genome snapshot, narrowed exception handling, and swarm-first admission.
+**Decision (core fix, `f80a28a`):** Fix all three paths with explicit logging, a conception-time father genome snapshot, narrowed exception handling, and swarm-first admission.
 
-**Rationale:** Reproduction and mortality must remain observable and consistent with evolution semantics (inheritance even when the father dies before parturition). Population cap `MAX_POPULATION_SIZE = 256` must be enforced before any slot or colony-list entry is published.
+**Owner decisions (`b7d3ab2`):**
+
+| Topic | Decision |
+| --- | --- |
+| **Colony save/load** | `ColonyStorage` persists each agent’s `genome` and pregnancy conception fields (`conception_father_genome`, `conception_father_id`, `conception_father_name`, `conception_father_generation`). After load — including while still pregnant — birth recombination uses the restored snapshot; `max_lifespan_age_s` is recomputed from `lt_max_lifespan_factor`. Saves written before these fields load as today: no genome, old-age cap as for an agent without a genome. |
+| **Offspring above cap (256)** | Keep **discard with log** (`offspring … was not admitted`); do not queue for a free slot. |
+| **`reproductive_system.update` in `_age_step`** | Catch `TypeError`, `ValueError`, `AttributeError`, `ArithmeticError`, `RuntimeError`; log warning `reproductive update failed for agent …`; leave `reproductive_drive` unchanged on failure. Successful path unchanged. |
+
+**Rationale:** Reproduction and mortality must remain observable and consistent with evolution semantics (inheritance even when the father dies before parturition, including across save/load). Population cap `MAX_POPULATION_SIZE = 256` must be enforced before any slot or colony-list entry is published.
 
 ---
 
@@ -52,7 +62,21 @@ At birth (`_inherit_nowa_from` → `_father_genome_for_birth`):
 | Crossover / apply raises | Warning `genome recombination failed for offspring of …` |
 | Missing mother and/or paternal genome | `offspring.genome is None`; warning `offspring of … born without a recombined genome (mother_genome=…, father_genome=…, father_id=…)` |
 
-### 3.2 Mortality: narrowed exceptions and lethal fallback
+### 3.2 Colony save/load (`colony_storage.py`)
+
+**Serialize** (per agent payload):
+
+- `genome` via `_serialize_genome` / `GenomeVector.to_dict()`.
+- Under reproduction: `conception_father_id`, `conception_father_name`, `conception_father_generation`, `conception_father_genome`.
+
+**Deserialize:**
+
+- Restore `agent.genome`; set `agent.mortality_system.max_lifespan_age_s = _colony_max_lifespan_age_s(agent.genome)`.
+- Restore conception snapshot fields on the mother; a pregnant agent loaded mid-gestation keeps the same father genome for birth as before save.
+
+**Backward compatibility:** saves without `genome` / conception keys deserialize to `genome is None`, default colony lifespan cap (no genome), no conception snapshot.
+
+### 3.3 Mortality: narrowed exceptions and lethal fallback
 
 **Core** (`MortalitySystem`):
 
@@ -65,7 +89,13 @@ At birth (`_inherit_nowa_from` → `_father_genome_for_birth`):
 - Then call `apply_if_already_lethal` with the same energy / wakefulness / steps / age inputs.
 - Colony path: unreadable energy falls back to `_energy_override` or **1.0**; unreadable wakefulness → **0.0**.
 
-### 3.3 Transactional population admission
+### 3.4 Reproductive update in `_age_step` (`colony_agent.py`)
+
+- `reproductive_system.update(...)` runs in the same step loop as mortality.
+- On the listed exception types: warning `reproductive update failed for agent %s: %s`; **`reproductive_drive` is not updated** for that step.
+- No change on the successful path.
+
+### 3.5 Transactional population admission
 
 **Swarm** (`SwarmEnvironment.add_agent`):
 
@@ -80,7 +110,8 @@ At birth (`_inherit_nowa_from` → `_father_genome_for_birth`):
 **Spawning** (`_spawn_pending_offspring`):
 
 - Each offspring goes through `add_agent`; on `ValueError` / `RuntimeError`, warning `offspring … was not admitted to the colony: …`.
-- `births_this_step` and `total_births` increment only for admitted agents; a child rejected at the cap is discarded (not queued).
+- `births_this_step` and `total_births` increment only for admitted agents.
+- **Product rule:** at the cap, the newborn is **discarded** (not queued); counters do not increment.
 
 ---
 
@@ -91,30 +122,21 @@ At birth (`_inherit_nowa_from` → `_father_genome_for_birth`):
 | Suite | File | Focus |
 | --- | --- | --- |
 | Core swarm | `tests/test_issue24_silent_failures.py` | Cap before publish; placement rollback; mortality exception + lethal removal; fed agent not killed on transient update error |
-| Colony host | `Demo/Colony chinchillas/tests/test_issue24_silent_failures.py` | Dead father + snapshot crossover; birth without genomes logged; mortality exception paths; cap / placement duplicates; spawn at cap |
+| Colony host | `Demo/Colony chinchillas/tests/test_issue24_silent_failures.py` | Dead father + snapshot crossover; birth without genomes logged; mortality paths; cap / placement / spawn at cap; **save/load genome + conception round-trip (pregnant mother)**; **legacy save without genome fields**; **reproductive update failure logged**; successful reproductive update |
 
-**Reported test runs (senior dev, commit `f80a28a`):**
+**Reported test runs (`b7d3ab2`):**
 
 | Scope | Result |
 | --- | --- |
-| Touched modules / issue regressions | **73 passed** |
-| Full repository | **1148 passed**, **5 skipped** |
+| Full repository | **1152 passed**, **5 skipped** |
 
 ---
 
 ## 5. Consequences
 
-- Offspring of fathers who die during gestation receive a recombined genome when the conception snapshot exists.
+- Offspring of fathers who die during gestation receive a recombined genome when the conception snapshot exists, including after save/load of a pregnant mother.
+- Reloaded agents regain individual old-age caps from stored genomes; legacy saves behave as agents without genomes.
 - Mortality bookkeeping errors are visible in logs; agents already in a lethal state can still die via `apply_if_already_lethal`.
+- Reproductive bookkeeping errors are visible in logs without mutating `reproductive_drive` on the failed step.
 - Colony list and swarm slot sets stay aligned at the population cap; birth counters match admitted agents only.
-- At exactly `MAX_POPULATION_SIZE`, newborns are dropped with a log line rather than duplicated or partially admitted.
-
----
-
-## 6. Open points
-
-| Topic | Notes |
-| --- | --- |
-| **Colony save/load** | `ColonyStorage` does not persist `genome` or `_conception_father_genome` — not addressed in this fix. |
-| **Offspring at cap (256)** | Current behaviour: reject and discard. Product choice: keep waiting for a slot vs hard delete. |
-| **`reproductive_system.update` / `register_reproduction`** | Broad `except Exception: pass` around `register_reproduction` in `_give_birth` unchanged (see #15). |
+- At `MAX_POPULATION_SIZE`, newborns are dropped with a log line (owner-confirmed behaviour).
