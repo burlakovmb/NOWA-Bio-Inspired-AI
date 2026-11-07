@@ -111,7 +111,7 @@ English: [issue-18-minor-learning-fixes.en.md](issue-18-minor-learning-fixes.en.
 
 **Сьют (на момент реализации):** `python -m pytest -q` — **917 passed, 5 skipped**.
 
-**Согласование доков:** [Phase_5_0_Value_Layer_RU_Spec.ru.md](../Phase_5_0_Value_Layer_RU_Spec.ru.md) / `.en.md` — граница `V(s)` обновлена до `|V| ≤ 1/(1−γ)`; `δ_t` по-прежнему `[-1, 1]`.
+**Согласование доков:** [Phase_5_0_Value_Layer_RU_Spec.ru.md](../Phase_5_0_Value_Layer_RU_Spec.ru.md) / `.en.md` и [Phase_5_0_1_Value_Layer_RU_Spec.ru.md](../Phase_5_0_1_Value_Layer_RU_Spec.ru.md) / `.en.md` (§4.1, §9.4) — граница `V(s)` `|V| ≤ 1/(1−γ)`; `δ_t` по-прежнему `[-1, 1]`.
 
 ---
 

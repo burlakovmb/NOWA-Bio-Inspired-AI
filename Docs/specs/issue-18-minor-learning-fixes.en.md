@@ -111,7 +111,7 @@ Implementation:
 
 **Suite (at implementation time):** `python -m pytest -q` — **917 passed, 5 skipped**.
 
-**Doc alignment:** [Phase_5_0_Value_Layer_RU_Spec.en.md](../Phase_5_0_Value_Layer_RU_Spec.en.md) / `.ru.md` — `V(s)` bound updated to `|V| ≤ 1/(1−γ)`; `δ_t` remains `[-1, 1]`.
+**Doc alignment:** [Phase_5_0_Value_Layer_RU_Spec.en.md](../Phase_5_0_Value_Layer_RU_Spec.en.md) / `.ru.md` and [Phase_5_0_1_Value_Layer_RU_Spec.en.md](../Phase_5_0_1_Value_Layer_RU_Spec.en.md) / `.ru.md` (§4.1, §9.4) — `V(s)` bound `|V| ≤ 1/(1−γ)`; `δ_t` remains `[-1, 1]`.
 
 ---
 
