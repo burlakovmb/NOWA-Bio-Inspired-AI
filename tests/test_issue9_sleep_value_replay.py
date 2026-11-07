@@ -99,12 +99,14 @@ def test_repeated_replay_approaches_target_without_sign_overshoot():
     exp.td_error_snapshot = 1.0
     target = 0.2
 
-    for _ in range(12):
+    # alpha_sleep is 0.25 * alpha_online, so the approach to 0.2 takes
+    # more replays than the old uncapped 0.5 step.
+    for _ in range(250):
         sleep._apply_replay_td_bg([exp])
 
     value = sleep.value_layer.get_value(exp.value_state_snapshot)
     assert value <= target + 1e-9
-    assert value > 0.15
+    assert value > 0.16
 
 
 def test_priority_uses_current_abs_delta_not_stored_snapshot():

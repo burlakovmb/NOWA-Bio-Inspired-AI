@@ -15,7 +15,12 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 from experience import Path, Event, EventType
 from temporal_chains import ChainMemory
-from value_layer import state_similarity
+from value_layer import (
+    derived_alpha_sleep,
+    discounted_value_bound,
+    effective_alpha_sleep,
+    state_similarity,
+)
 
 
 class CorticalPattern:
@@ -171,6 +176,7 @@ class SleepManager:
         self.td_anchor_threshold: float = 0.12
         self.delta_value_max_per_sleep: float = 0.025
         self.value_total_cap: float = 0.3
+        # Legacy field. _resolved_value_cap widens a unit clamp to 1/(1-γ).
         self.value_cap: float = 1.0
         self.alpha_sleep_ratio: float = 0.25
         self.dopamine_sleep_scale: float = 0.3
@@ -250,6 +256,56 @@ class SleepManager:
         self._rng = random.Random()
         self.last_sleep_replay_stats: Dict[str, float] = {}
         self.last_sac_stats: Dict[str, float] = {}
+
+    def _resolved_alpha_sleep(self, value_layer, stability_gate: float) -> float:
+        """Sleep step size: alpha_online * alpha_sleep_ratio, never above the spec.
+
+        A stored ``alpha_sleep_default`` may only make the rate smaller.
+        """
+        alpha_online = float(
+            getattr(
+                value_layer,
+                "alpha_online_default",
+                getattr(value_layer, "alpha_default", 0.03),
+            )
+        )
+        ratio = getattr(self, "alpha_sleep_ratio", 0.25)
+        stored = getattr(value_layer, "alpha_sleep_default", None)
+        alpha_sleep = effective_alpha_sleep(alpha_online, stored, ratio)
+        try:
+            gate = float(stability_gate)
+        except (TypeError, ValueError):
+            gate = 1.0
+        if not math.isfinite(gate):
+            gate = 1.0
+        gate = max(0.0, min(1.0, gate))
+        try:
+            sleep_alpha_cap = float(getattr(self, "sleep_alpha_cap", 0.2))
+        except (TypeError, ValueError):
+            sleep_alpha_cap = 0.2
+        if not math.isfinite(sleep_alpha_cap) or sleep_alpha_cap < 0.0:
+            sleep_alpha_cap = 0.2
+        effective = min(sleep_alpha_cap, alpha_sleep * gate)
+        return min(max(0.0, effective), derived_alpha_sleep(alpha_online, ratio))
+
+    def _resolved_value_cap(self) -> float:
+        """V range at least 1/(1-γ) for a unit reward.
+
+        A configured ``value_cap`` may be wider. It cannot stay at the legacy
+        unit clamp, which cannot hold the discounted return.
+        """
+        layer = getattr(self, "value_layer", None)
+        gamma = 0.95
+        if layer is not None:
+            gamma = getattr(layer, "gamma_default", 0.95)
+        needed = discounted_value_bound(gamma, 1.0)
+        try:
+            configured = float(getattr(self, "value_cap", needed))
+        except (TypeError, ValueError):
+            return needed
+        if not math.isfinite(configured) or configured <= 0.0:
+            return needed
+        return max(configured, needed)
     
     def sleep_cycle(self) -> dict:
         """
@@ -1468,15 +1524,7 @@ class SleepManager:
 
         stability_index = self._get_global_stability_index()
         stability_gate = max(0.3, min(1.0, float(stability_index)))
-        alpha_sleep_default = float(
-            getattr(
-                value_layer,
-                "alpha_sleep_default",
-                getattr(value_layer, "alpha_online_default", getattr(value_layer, "alpha_default", 0.03)),
-            )
-        )
-        sleep_alpha_cap = max(0.001, float(getattr(self, "sleep_alpha_cap", 0.2)))
-        alpha_sleep_effective = min(sleep_alpha_cap, max(0.001, alpha_sleep_default * stability_gate))
+        alpha_sleep_effective = self._resolved_alpha_sleep(value_layer, stability_gate)
         td_clip = min(1.0, float(self.td_clip_sleep))
         dopamine_sleep_scale = max(0.0, min(1.0, float(getattr(self, "dopamine_sleep_scale", 0.3))))
         per_update_cap_cfg = float(getattr(self, "per_update_cap", self.delta_value_max_per_sleep))
@@ -1578,7 +1626,8 @@ class SleepManager:
             if not state_key:
                 state_key = value_layer.encoder.encode(state_snapshot)
             current_v = float(value_layer.get_value(state_snapshot))
-            new_v = max(-float(self.value_cap), min(float(self.value_cap), current_v + delta_v))
+            value_cap = self._resolved_value_cap()
+            new_v = max(-value_cap, min(value_cap, current_v + delta_v))
             value_layer._set_value(state_key, new_v)
             applied_delta = new_v - current_v
             if abs(applied_delta) <= 1e-12:
@@ -1657,7 +1706,8 @@ class SleepManager:
         value_layer.last_delta_sign = int(
             1 if value_layer.last_td_error > 1e-12 else (-1 if value_layer.last_td_error < -1e-12 else 0)
         )
-        value_layer.last_value = max(-float(self.value_cap), min(float(self.value_cap), float(getattr(value_layer, "last_value", 0.0))))
+        value_cap = self._resolved_value_cap()
+        value_layer.last_value = max(-value_cap, min(value_cap, float(getattr(value_layer, "last_value", 0.0))))
         sleep_updates_after = int(getattr(value_layer, "sleep_update_count", 0))
         if value_delta_total >= global_sleep_update_budget - 1e-12:
             replay_blocked = True

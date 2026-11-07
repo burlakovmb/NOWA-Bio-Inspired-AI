@@ -959,7 +959,7 @@ class Agent:
         Shared non-finite rule with feedback: ``None``, non-numeric values
         and NaN are unknown (no labile tag, no episode outcome). ±inf is ±1.
         Finite rewards are kept on the host's scale. Feedback then maps a
-        finite value through the integer rating scale [-2, 2] / 2.
+        finite value through the rating scale [-2, 2] / 2, keeping fractions.
         """
         if reward is None or isinstance(reward, bool):
             return 0.0, False
@@ -977,8 +977,8 @@ class Agent:
         """Return (rating, reward_signal) or None when the rating is unknown.
 
         NaN and non-numeric ratings are unknown: the episode is left as it
-        was. ±inf becomes reward ±1 (rating ±2). A finite number is an
-        integer rating clamped to [-2, 2], and the reward is rating/2.
+        was. ±inf becomes reward ±1 (rating ±2). A finite number is kept
+        as a float, clamped to [-2, 2], and the reward is rating/2.
         """
         if feedback_rating is None or isinstance(feedback_rating, bool):
             return None
@@ -989,10 +989,10 @@ class Agent:
         if math.isnan(numeric):
             return None
         if math.isinf(numeric):
-            rating = 2 if numeric > 0.0 else -2
+            rating = 2.0 if numeric > 0.0 else -2.0
             return rating, (1.0 if numeric > 0.0 else -1.0)
-        rating = max(-2, min(2, int(numeric)))
-        reward_signal = max(-1.0, min(1.0, float(rating) / 2.0))
+        rating = max(-2.0, min(2.0, numeric))
+        reward_signal = rating / 2.0
         return rating, reward_signal
 
     def commit_executed_transition(
@@ -3287,7 +3287,7 @@ class Agent:
 
     def apply_feedback_to_last_experience(
         self,
-        feedback_rating: int,
+        feedback_rating: float,
         context_events=None,
         action_id: str = None,
         episode_id: str = None,
@@ -3301,7 +3301,7 @@ class Agent:
 
         NaN and non-numeric ratings are unknown (``updated=False``, no write).
         ±inf is ±1, the same rule as ``step`` / ``commit``. A finite rating
-        is clamped to the integer scale [-2, 2] and divided by 2.
+        is kept as a float, clamped to [-2, 2], and divided by 2.
         A rating changed after that episode was consolidated is a correction
         in the next sleep, not a second waking write into the stable tier.
         """

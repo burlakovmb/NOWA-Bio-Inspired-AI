@@ -209,7 +209,7 @@ def test_online_td_clip_limits_reward_spike():
     assert abs(out["td_error"] - 0.2) < 1e-9
 
 
-def test_sleep_default_alpha_is_stronger_than_online_default():
+def test_sleep_alpha_stays_within_online_ratio():
     layer = ValueLayer(alpha_online_default=0.01, alpha_sleep_default=0.08, max_update_l2=1.0)
     st = _state("s0")
     st_next = _state("s1")
@@ -236,4 +236,6 @@ def test_sleep_default_alpha_is_stronger_than_online_default():
         mode="sleep",
     )
 
-    assert abs(sleep["value"]) > abs(online["value"])
+    # Spec: alpha_sleep ≤ 0.25 * alpha_online. The old 0.08 default is capped.
+    assert layer.alpha_sleep_default == pytest.approx(0.25 * layer.alpha_online_default)
+    assert abs(sleep["value"]) < abs(online["value"])

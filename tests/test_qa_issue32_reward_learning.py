@@ -453,9 +453,9 @@ def test_qa_terminal_bootstrap_is_zero_and_one_update_per_known_reward():
         action = successor.step(["goal"], reward=1.0, terminal=True)
     assert _effective(successor, ["goal"], action) > 0.05
     successor.sleep(cycles=3)
-    # Three replay cycles spend the existing value budget (0.225). See
-    # test_td_transition for why this is not the old waking Q > 0.8.
-    assert _q(successor, ["goal"], action) > 0.22
+    # Three replay cycles with alpha_sleep = 0.25 * alpha_online land near
+    # 0.066. See test_td_transition. Two cycles stay near 0.044.
+    assert _q(successor, ["goal"], action) > 0.05
     open_loop = _build_agent(("go",), seed=1, capacity=30)
     open_loop.step(
         ["goal"],
@@ -580,7 +580,7 @@ def test_qa_single_action_and_nogo_block():
         single.apply_feedback_to_last_experience(2, context_events=["ctx"], action_id=action)
     assert seen == ["only"] * 10
     single.sleep(cycles=3)
-    assert _q(single, ["ctx"], "only") > 0.22
+    assert _q(single, ["ctx"], "only") > 0.05
     habit = _habit_strength(single, ["ctx"], "only")
     assert 0.0 < habit <= 1.0
 
