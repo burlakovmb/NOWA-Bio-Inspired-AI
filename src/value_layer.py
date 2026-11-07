@@ -36,6 +36,54 @@ def _clamp(value: float, min_value: float, max_value: float) -> float:
         return max_value
     return value
 
+# Phase 5.A: alpha_sleep ≤ 0.25 · alpha_online. The ratio is applied, not only stored.
+ALPHA_SLEEP_RATIO_MAX = 0.25
+
+
+def alpha_sleep_ratio_value(ratio: float) -> float:
+    return min(ALPHA_SLEEP_RATIO_MAX, max(0.0, _safe_float(ratio, ALPHA_SLEEP_RATIO_MAX)))
+
+
+def derived_alpha_sleep(alpha_online: float, ratio: float = ALPHA_SLEEP_RATIO_MAX) -> float:
+    online = max(0.0, _safe_float(alpha_online, 0.0))
+    return online * alpha_sleep_ratio_value(ratio)
+
+
+def effective_alpha_sleep(
+    alpha_online: float,
+    alpha_sleep: Optional[float],
+    ratio: float = ALPHA_SLEEP_RATIO_MAX,
+) -> float:
+    """Sleep step from alpha_online * ratio, never above the spec ceiling.
+
+    ``alpha_sleep is None`` means derive. A finite stored rate may only be
+    tighter than that derived rate.
+    """
+    derived = derived_alpha_sleep(alpha_online, ratio)
+    if alpha_sleep is None:
+        return derived
+    stored = _safe_float(alpha_sleep, derived)
+    if not math.isfinite(stored) or stored < 0.0:
+        return derived
+    return min(stored, derived)
+
+
+def discounted_value_bound(gamma: float, reward_abs_max: float = 1.0) -> float:
+    """Largest |discounted return| of a reward bounded by ``reward_abs_max``.
+
+    |sum_k gamma^k * r| ≤ R / (1 - gamma) for |r| ≤ R and gamma in [0, 0.999].
+    Unit rewards (feedback and offline replay) use R = 1, so gamma = 0.95
+    yields 20. Reward magnitudes themselves are not rescaled.
+    """
+    gamma_raw = _safe_float(gamma, 0.95)
+    if not math.isfinite(gamma_raw):
+        gamma_raw = 0.95
+    gamma_v = _clamp(gamma_raw, 0.0, 0.999)
+    reward_raw = _safe_float(reward_abs_max, 1.0)
+    if not math.isfinite(reward_raw) or reward_raw < 0.0:
+        reward_raw = 1.0
+    return reward_raw / max(1e-9, 1.0 - gamma_v)
+
 
 def _sigmoid(value: float) -> float:
     x = _safe_float(value, 0.0)
@@ -384,7 +432,9 @@ class ValueLayer:
     # Legacy alias kept for backward compatibility with old saves/callers.
     alpha_default: float = 0.03
     alpha_online_default: float = 0.03
-    alpha_sleep_default: float = 0.08
+    # None derives alpha_sleep from alpha_online * alpha_sleep_ratio (spec ≤ 0.25).
+    alpha_sleep_default: Optional[float] = None
+    alpha_sleep_ratio: float = ALPHA_SLEEP_RATIO_MAX
     # Phase 6.1 ACh settings.
     ach_alpha_gain: float = 0.4
     alpha_online_soft_cap: float = 0.15
@@ -511,10 +561,11 @@ class ValueLayer:
         self.ach_alpha_gain = _clamp(_safe_float(self.ach_alpha_gain, 0.4), 0.0, 2.0)
         self.alpha_online_default = _clamp(online_alpha, 0.001, float(self.alpha_online_soft_cap))
         self.alpha_default = float(self.alpha_online_default)
-        self.alpha_sleep_default = _clamp(
-            _safe_float(self.alpha_sleep_default, 0.08),
-            0.001,
-            0.2,
+        self.alpha_sleep_ratio = alpha_sleep_ratio_value(self.alpha_sleep_ratio)
+        self.alpha_sleep_default = effective_alpha_sleep(
+            self.alpha_online_default,
+            self.alpha_sleep_default,
+            self.alpha_sleep_ratio,
         )
         self.gamma_default = _clamp(_safe_float(self.gamma_default, 0.95), 0.0, 0.999)
         self.dopamine_scale = _clamp(_safe_float(self.dopamine_scale, 0.5), 0.0, 2.0)
@@ -799,8 +850,10 @@ class ValueLayer:
         # The TD of that backup is still measured from the value that
         # existed before the backup, but the table is not rewritten from it.
         revising = prior_value is not None and replaced_reward is not None
+        # Unit-reward return bound 1/(1-γ). Do not rescale the reward.
+        value_bound = self.value_abs_bound()
         if revising:
-            current_value = _clamp(_safe_float(prior_value), -1.0, 1.0)
+            current_value = _clamp(_safe_float(prior_value), -value_bound, value_bound)
         else:
             current_value = stored_current
         next_value = self._get_value(next_state_key)
@@ -808,7 +861,7 @@ class ValueLayer:
             next_value = 0.0
         elif bootstrap_value is not None:
             # max_a Q(s', a) for the real successor, not the unread action="" key.
-            next_value = _clamp(_safe_float(bootstrap_value), -1.0, 1.0)
+            next_value = _clamp(_safe_float(bootstrap_value), -value_bound, value_bound)
 
         td_clip = min(1.0, float(self.td_clip_online)) if mode_v == "online" else 1.0
         td_profile = self.td_layer.compute_td_error(
@@ -904,9 +957,9 @@ class ValueLayer:
             )
             applied_delta = update_delta
             update_delta = update_delta - old_delta
-            new_value = _clamp(stored_current + update_delta, -1.0, 1.0)
+            new_value = _clamp(stored_current + update_delta, -value_bound, value_bound)
         else:
-            new_value = _clamp(stored_current + update_delta, -1.0, 1.0)
+            new_value = _clamp(stored_current + update_delta, -value_bound, value_bound)
         self._set_value(state_key, new_value)
 
         self.last_update_ts = ts
@@ -1046,7 +1099,14 @@ class ValueLayer:
             "similarity_transfer_quantile": float(self.similarity_transfer_quantile),
             "alpha_default": float(self.alpha_default),
             "alpha_online_default": float(self.alpha_online_default),
-            "alpha_sleep_default": float(self.alpha_sleep_default),
+            "alpha_sleep_default": float(
+                effective_alpha_sleep(
+                    self.alpha_online_default,
+                    self.alpha_sleep_default,
+                    self.alpha_sleep_ratio,
+                )
+            ),
+            "alpha_sleep_ratio": float(alpha_sleep_ratio_value(self.alpha_sleep_ratio)),
             "ach_alpha_gain": float(self.ach_alpha_gain),
             "alpha_online_soft_cap": float(self.alpha_online_soft_cap),
             "gamma_default": float(self.gamma_default),
@@ -1109,7 +1169,14 @@ class ValueLayer:
             "similarity_transfer_quantile": float(self.similarity_transfer_quantile),
             "alpha_default": float(self.alpha_default),
             "alpha_online_default": float(self.alpha_online_default),
-            "alpha_sleep_default": float(self.alpha_sleep_default),
+            "alpha_sleep_default": float(
+                effective_alpha_sleep(
+                    self.alpha_online_default,
+                    self.alpha_sleep_default,
+                    self.alpha_sleep_ratio,
+                )
+            ),
+            "alpha_sleep_ratio": float(alpha_sleep_ratio_value(self.alpha_sleep_ratio)),
             "ach_alpha_gain": float(self.ach_alpha_gain),
             "alpha_online_soft_cap": float(self.alpha_online_soft_cap),
             "gamma_default": float(self.gamma_default),
@@ -1252,7 +1319,12 @@ class ValueLayer:
             similarity_transfer_quantile=float(raw.get("similarity_transfer_quantile", 0.5)),
             alpha_default=legacy_alpha,
             alpha_online_default=float(raw.get("alpha_online_default", legacy_alpha)),
-            alpha_sleep_default=float(raw.get("alpha_sleep_default", 0.08)),
+            alpha_sleep_default=(
+                None
+                if raw.get("alpha_sleep_default") is None
+                else float(raw.get("alpha_sleep_default"))
+            ),
+            alpha_sleep_ratio=float(raw.get("alpha_sleep_ratio", ALPHA_SLEEP_RATIO_MAX)),
             ach_alpha_gain=float(raw.get("ach_alpha_gain", 0.4)),
             alpha_online_soft_cap=float(raw.get("alpha_online_soft_cap", 0.15)),
             gamma_default=float(raw.get("gamma_default", 0.95)),
@@ -1296,7 +1368,8 @@ class ValueLayer:
                 if not isinstance(item, (list, tuple)) or len(item) != 2:
                     continue
                 state_key = str(item[0])
-                value = _clamp(_safe_float(item[1]), -1.0, 1.0)
+                value_bound = inst.value_abs_bound()
+                value = _clamp(_safe_float(item[1]), -value_bound, value_bound)
                 inst._set_value(state_key, value)
         expectation_data = raw.get("expectation_memory") or []
         if isinstance(expectation_data, Mapping):
@@ -1348,7 +1421,8 @@ class ValueLayer:
         inst.last_td_error = _clamp(_safe_float(raw.get("last_td_error")), -1.0, 1.0)
         inst.last_reward_raw = _safe_float(raw.get("last_reward_raw"), 0.0)
         inst.last_reward_scaled = _safe_float(raw.get("last_reward_scaled"), inst.last_reward_raw)
-        inst.last_value = _clamp(_safe_float(raw.get("last_value")), -1.0, 1.0)
+        _value_bound = inst.value_abs_bound()
+        inst.last_value = _clamp(_safe_float(raw.get("last_value")), -_value_bound, _value_bound)
         inst.last_dopamine_delta = _clamp(
             _safe_float(raw.get("last_dopamine_delta")),
             -0.1,
@@ -1466,8 +1540,15 @@ class ValueLayer:
         prediction_shock: bool = False,
     ) -> float:
         if mode == "sleep":
-            alpha_default = self.alpha_sleep_default
-            alpha_cap = 0.2
+            # Spec: alpha_sleep ≤ 0.25 · alpha_online. A stored default may only be tighter.
+            derived = derived_alpha_sleep(self.alpha_online_default, self.alpha_sleep_ratio)
+            alpha_default = effective_alpha_sleep(
+                self.alpha_online_default,
+                self.alpha_sleep_default,
+                self.alpha_sleep_ratio,
+            )
+            alpha_cap = derived
+            alpha_floor = 0.0
         else:
             online_cap = max(0.1, float(self.alpha_online_soft_cap))
             self.alpha_online_default = _clamp(
@@ -1478,13 +1559,16 @@ class ValueLayer:
             self.alpha_default = float(self.alpha_online_default)
             alpha_default = self.alpha_online_default
             alpha_cap = online_cap
+            alpha_floor = 0.001
 
-        alpha_v = _clamp(_safe_float(alpha, alpha_default), 0.001, alpha_cap)
+        if alpha_cap < alpha_floor:
+            alpha_cap = alpha_floor
+        alpha_v = _clamp(_safe_float(alpha, alpha_default), alpha_floor, alpha_cap)
         if stability_index is not None:
             # Under instability lower the learning rate to avoid runaway updates.
             stability = _clamp(_safe_float(stability_index, 1.0), 0.0, 1.0)
             scale = max(0.2, stability)
-            alpha_v = _clamp(alpha_v * scale, 0.001, alpha_cap)
+            alpha_v = _clamp(alpha_v * scale, alpha_floor, alpha_cap)
 
         ach_v = _clamp(_safe_float(acetylcholine, 0.0), 0.0, 1.0)
         if mode != "sleep":
@@ -1493,7 +1577,7 @@ class ValueLayer:
             ach_effective = max(0.0, ach_v - ach_baseline_v)
             ach_gain = _clamp(_safe_float(self.ach_alpha_gain, 0.4), 0.0, 2.0)
             alpha_v = alpha_v * (1.0 + (ach_gain * ach_effective))
-            alpha_v = _clamp(alpha_v, 0.001, alpha_cap)
+            alpha_v = _clamp(alpha_v, alpha_floor, alpha_cap)
             if ach_v > 0.9:
                 # Safety: enforce soft cap in very high ACh regime.
                 alpha_v = min(alpha_v, alpha_cap)
@@ -1505,11 +1589,11 @@ class ValueLayer:
         damping = _clamp(_safe_float(self.stability_damping, 0.80), 0.0, 1.0)
         selective_factor = 1.0 - (confidence_v * expectation_stability_v * damping)
         selective_factor = _clamp(selective_factor, 0.05, 1.0)
-        alpha_v = _clamp(alpha_v * selective_factor, 0.001, alpha_cap)
+        alpha_v = _clamp(alpha_v * selective_factor, alpha_floor, alpha_cap)
 
         if bool(prediction_shock):
             shock_boost = max(0.0, _safe_float(self.shock_plasticity_boost, 0.60))
-            alpha_v = _clamp(alpha_v * (1.0 + shock_boost), 0.001, alpha_cap)
+            alpha_v = _clamp(alpha_v * (1.0 + shock_boost), alpha_floor, alpha_cap)
 
         self.last_alpha_effective = float(alpha_v)
         self.last_acetylcholine = float(ach_v)
@@ -1950,9 +2034,21 @@ class ValueLayer:
             self.online_update_count += 1
         self.update_count = self.online_update_count + self.sleep_update_count
 
+    def value_abs_bound(self, gamma: Optional[float] = None) -> float:
+        """Largest |V| that can hold the discounted return of a unit reward.
+
+        The bound follows ``gamma_default``. A larger ``gamma`` widens it.
+        Reward magnitudes are left unchanged.
+        """
+        bound = discounted_value_bound(self.gamma_default, 1.0)
+        if gamma is not None:
+            bound = max(bound, discounted_value_bound(gamma, 1.0))
+        return bound
+
     def _get_value(self, state_key: str) -> float:
         if state_key in self.values:
-            value = _clamp(_safe_float(self.values[state_key]), -1.0, 1.0)
+            bound = self.value_abs_bound()
+            value = _clamp(_safe_float(self.values[state_key]), -bound, bound)
             self.values.move_to_end(state_key)
             return value
         return 0.0
@@ -1962,7 +2058,8 @@ class ValueLayer:
 
         if not assert_learning_allowed("ValueLayer._set_value"):
             return
-        self.values[state_key] = _clamp(_safe_float(value), -1.0, 1.0)
+        bound = self.value_abs_bound()
+        self.values[state_key] = _clamp(_safe_float(value), -bound, bound)
         self.values.move_to_end(state_key)
         while len(self.values) > self.max_states:
             removed_key, _ = self.values.popitem(last=False)

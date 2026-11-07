@@ -163,9 +163,11 @@ def test_replay_moves_toward_current_delta_across_different_state_values():
     assert after > before
     assert layer.last_td_error > 0.0
     # One fractional step of the live error cannot jump past the Bellman target.
+    # The step uses alpha_sleep = 0.25 * alpha_online, not the stored 0.2.
     target = current + expected
+    alpha_sleep = 0.25 * float(layer.alpha_online_default)
     assert after < target
-    assert after - before == pytest.approx(0.2 * expected, abs=0.02)
+    assert after - before == pytest.approx(alpha_sleep * expected, abs=1e-4)
 
 
 def test_repeated_replay_does_not_overshoot_a_learned_target():
@@ -189,7 +191,8 @@ def test_repeated_replay_does_not_overshoot_a_learned_target():
     # Table is already above the target, while the stored sign is positive.
     _set_q(layer, exp.value_state_snapshot, "move", target + 0.35)
 
-    for _ in range(16):
+    # alpha_sleep is 0.25 * alpha_online, so closing a 0.35 gap takes more replays.
+    for _ in range(300):
         sleep._apply_replay_td_bg([exp])
         value = layer.get_value(exp.value_state_snapshot)
         assert value >= target - 1e-9
@@ -235,7 +238,14 @@ def test_terminal_bootstrap_ignores_successor_value():
     after_open = layer.get_value(open_exp.value_state_snapshot)
 
     assert after_terminal > before
-    assert after_open - current > (after_terminal - before) + 0.05
+    # The open transition's larger TD moves Q further. The gap scales with
+    # alpha_sleep (0.25 * alpha_online), so it is no longer a flat 0.05.
+    terminal_step = after_terminal - before
+    open_step = after_open - current
+    open_td = reward + (gamma * successor) - current
+    terminal_td = reward - current
+    assert open_step > terminal_step
+    assert open_step / terminal_step == pytest.approx(open_td / terminal_td, rel=0.02)
 
 
 def test_variance_gate_follows_real_reward_history_per_state():
