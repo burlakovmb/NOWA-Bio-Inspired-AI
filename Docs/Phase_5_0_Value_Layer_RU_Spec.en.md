@@ -47,8 +47,10 @@ The Value Layer:
 ### 3.1 Value Function
 
 ```text
-V(s) ∈ [-1, 1]
+|V(s)| ≤ 1 / (1 − γ)   for |r| ≤ 1; default γ = 0.95 → 20
 ```
+
+(`δ_t` remains clamped to `[-1, 1]`; see [issue-18-minor-learning-fixes.en.md](specs/issue-18-minor-learning-fixes.en.md).)
 
 The implementation admits:
 - a tabular model (state_hash → value), or
