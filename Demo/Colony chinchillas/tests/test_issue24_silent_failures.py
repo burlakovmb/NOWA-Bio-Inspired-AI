@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
-from colony_agent import ChinchillaAgent
+from colony_agent import ChinchillaAgent, _colony_max_lifespan_age_s
+from colony_storage import ColonyStorage
 from genome import GENE_REGISTRY, GenomeVector
 from simulation_runner import SimulationRunner
 import swarm as swarm_module
@@ -197,3 +200,132 @@ def test_placement_failure_rolls_back_before_the_colony_list_changes(monkeypatch
 
     assert runner.agents == []
     assert runner.swarm.get_all_agents() == []
+
+
+def test_save_load_keeps_genome_cap_and_conception_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mother_genome = _genome("mother", lt_max_lifespan_factor=0.5)
+    father_genome = _genome("father", lt_max_lifespan_factor=2.0)
+    mother = ChinchillaAgent(
+        sex="F",
+        is_mature=True,
+        genome=mother_genome,
+        generation=2,
+        rng_seed=11,
+        name="mother-save",
+    )
+    father = ChinchillaAgent(
+        sex="M",
+        is_mature=True,
+        genome=father_genome,
+        generation=5,
+        rng_seed=12,
+        name="father-save",
+    )
+    mother.colony = [mother, father]
+    mother._start_pregnancy(father.agent_id)
+    mother.gestation_timer = 40.0
+
+    runner = SimulationRunner()
+    runner.add_agent(mother)
+    storage = ColonyStorage(save_dir=tmp_path)
+    loaded = storage.load_colony(storage.save_colony(runner, "pregnancy.json"))
+
+    assert len(loaded.agents) == 1
+    restored = loaded.agents[0]
+    assert restored.is_pregnant is True
+    assert restored.gestation_timer == pytest.approx(40.0)
+    assert restored.genome is not None
+    assert restored._conception_father_genome is not None
+    assert restored.genome.genes["lt_max_lifespan_factor"] == pytest.approx(0.5)
+    assert restored._conception_father_genome.genes["lt_max_lifespan_factor"] == pytest.approx(2.0)
+    assert restored._conception_father_id == father.agent_id
+    assert restored._conception_father_name == father.name
+    assert restored._conception_father_generation == 5
+    assert restored.mortality_system.max_lifespan_age_s == pytest.approx(
+        _colony_max_lifespan_age_s(restored.genome)
+    )
+    assert restored.mortality_system.max_lifespan_age_s == pytest.approx(
+        mother.mortality_system.max_lifespan_age_s
+    )
+
+    monkeypatch.setattr(GenomeVector, "mutate", _identity_mutate)
+    restored._give_birth()
+
+    assert restored.pending_offspring_list
+    child = restored.pending_offspring_list[0]
+    assert child.genome is not None
+    assert child.parents[1] == father.agent_id
+    assert child.generation == 6
+    assert child.genome.genes["lt_max_lifespan_factor"] == pytest.approx(1.25)
+    assert child.genome_inheritance_meta["mode"] == "recombined"
+    assert child.mortality_system.max_lifespan_age_s == pytest.approx(
+        _colony_max_lifespan_age_s(child.genome)
+    )
+
+
+def test_old_save_without_genome_fields_loads(tmp_path: Path) -> None:
+    runner = SimulationRunner()
+    agent = ChinchillaAgent(
+        sex="F",
+        is_mature=True,
+        genome=_genome("stripped", lt_max_lifespan_factor=2.0),
+        rng_seed=13,
+    )
+    runner.add_agent(agent)
+    storage = ColonyStorage(save_dir=tmp_path)
+    path = Path(storage.save_colony(runner, "legacy.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for item in payload["agents"]:
+        item.pop("genome", None)
+        reproduction = item.get("reproduction", {})
+        for key in (
+            "conception_father_genome",
+            "conception_father_id",
+            "conception_father_name",
+            "conception_father_generation",
+        ):
+            reproduction.pop(key, None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = storage.load_colony(path)
+    restored = loaded.agents[0]
+    assert restored.agent_id == agent.agent_id
+    assert restored.genome is None
+    assert restored._conception_father_genome is None
+    assert restored._conception_father_id is None
+    assert restored._conception_father_generation == 0
+    assert restored.mortality_system.max_lifespan_age_s == pytest.approx(
+        _colony_max_lifespan_age_s(None)
+    )
+
+
+def test_reproductive_update_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    agent = ChinchillaAgent(sex="F", is_mature=True, age=20.0, rng_seed=14)
+    agent.reproductive_system.reproductive_drive = 0.4
+    agent.energy = 0.8
+    agent.lived_steps = 20
+
+    def boom(**_kwargs):
+        raise RuntimeError("reproductive broke")
+
+    agent.reproductive_system.update = boom
+    with caplog.at_level(logging.WARNING, logger="colony_agent"):
+        agent._age_step(1.0)
+
+    assert "reproductive update failed" in caplog.text
+    assert agent.reproductive_system.reproductive_drive == pytest.approx(0.4)
+    assert agent.mortality_system.is_dead() is False
+
+
+def test_reproductive_update_still_runs_when_it_succeeds() -> None:
+    agent = ChinchillaAgent(sex="M", is_mature=True, age=20.0, rng_seed=15)
+    agent.reproductive_system.reproductive_drive = 0.4
+    agent.lived_steps = 10
+    agent.energy = 0.8
+
+    agent._age_step(1.0)
+
+    assert agent.reproductive_system.reproductive_drive == pytest.approx(0.0)

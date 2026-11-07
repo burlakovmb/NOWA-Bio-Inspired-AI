@@ -1891,18 +1891,48 @@ class ChinchillaAgent(Agent):
         for known in self.knowledge.values():
             known.decay(self.sim_time, dt)
 
-        try:
-            self.reproductive_system.update(
-                energy=self.energy,
-                valence=self.valence,
-                cortisol=float(getattr(self.neuromodulators, "cortisol", 0.0)),
-                lived_steps=self.lived_steps,
-                resource_share=self._food_availability(),
-            )
-        except Exception:
-            pass
-
+        self._apply_reproduction()
         self._apply_mortality(dt)
+
+    def _apply_reproduction(self) -> None:
+        """Advance reproductive drive. A failed update is logged and leaves drive as it was."""
+        reproductive = getattr(self, "reproductive_system", None)
+        update = getattr(reproductive, "update", None)
+        if reproductive is None or not callable(update):
+            logger.warning(
+                "reproductive update skipped for agent %s: reproductive system is missing",
+                getattr(self, "agent_id", ""),
+            )
+            return
+        try:
+            energy = _coerce_finite(self.energy)
+            valence = _coerce_finite(self.valence)
+            neuromod = getattr(self, "neuromodulators", None)
+            cortisol = _coerce_finite(getattr(neuromod, "cortisol", 0.0))
+            lived_steps = int(getattr(self, "lived_steps", 0) or 0)
+            resource_share = _coerce_finite(self._food_availability())
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            logger.warning(
+                "reproductive update inputs unreadable for agent %s: %s",
+                getattr(self, "agent_id", ""),
+                exc,
+            )
+            return
+        try:
+            update(
+                energy=energy,
+                valence=valence,
+                cortisol=cortisol,
+                lived_steps=lived_steps,
+                resource_share=resource_share,
+            )
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            logger.warning(
+                "reproductive update failed for agent %s: %s",
+                getattr(self, "agent_id", ""),
+                exc,
+                exc_info=True,
+            )
 
     def _apply_mortality(self, dt: float) -> None:
         """Advance mortality. A failed update is logged and does not cancel death."""
