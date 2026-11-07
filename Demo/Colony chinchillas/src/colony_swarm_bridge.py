@@ -251,6 +251,9 @@ class ColonySwarmBridge:
         self._swarm.add_agent(agent, position=position)
         self.sync_positions()
 
+    def get_agent(self, agent_id: str) -> Any:
+        return self._swarm.get_agent(str(agent_id))
+
     def remove_agent(self, agent_id: str) -> None:
         self._swarm.remove_agent(str(agent_id))
         for zone_agents in self._zone_occupants.values():
