@@ -26,6 +26,15 @@ def _identity_mutate(self, rate=0.05, sigma_scale=1.0, rng=None):
     return self
 
 
+def _pin_uniform_draw_to_father(rng: object) -> None:
+    """Make uniform crossover copy the second parent's allele on every gene.
+
+    ``random() >= 0.5`` assigns that allele to the first child. The conception
+    snapshot is the second parent; the living father's genome was replaced.
+    """
+    rng.random = lambda: 0.99  # type: ignore[attr-defined]
+
+
 def test_dead_father_still_contributes_conception_genome(monkeypatch) -> None:
     mother_genome = _genome("mother", lt_max_lifespan_factor=0.5, wk_accumulation_factor=0.5)
     father_genome = _genome("father", lt_max_lifespan_factor=2.0, wk_accumulation_factor=2.0)
@@ -56,6 +65,7 @@ def test_dead_father_still_contributes_conception_genome(monkeypatch) -> None:
     father.genome = mother_genome
     mother.colony = [mother]
     monkeypatch.setattr(GenomeVector, "mutate", _identity_mutate)
+    _pin_uniform_draw_to_father(mother._rng)
 
     mother._give_birth()
 
@@ -68,10 +78,10 @@ def test_dead_father_still_contributes_conception_genome(monkeypatch) -> None:
         assert child.genome_inheritance_meta["mode"] == "recombined"
         assert child.genome_inheritance_meta["mother_id"] == mother.agent_id
         assert child.genome_inheritance_meta["father_id"] == father.agent_id
-        assert child.genome.genes["lt_max_lifespan_factor"] == pytest.approx(1.25)
-        assert child.genome.genes["wk_accumulation_factor"] == pytest.approx(1.25)
+        assert child.genome.genes["lt_max_lifespan_factor"] == pytest.approx(2.0)
+        assert child.genome.genes["wk_accumulation_factor"] == pytest.approx(2.0)
         assert child.genome.distance(mother_genome) > 0.0
-        assert child.genome.distance(father_genome) > 0.0
+        assert child.genome.distance(father_genome) == pytest.approx(0.0)
 
 
 def test_birth_without_any_genome_is_logged(caplog: pytest.LogCaptureFixture) -> None:
@@ -252,6 +262,7 @@ def test_save_load_keeps_genome_cap_and_conception_snapshot(
     )
 
     monkeypatch.setattr(GenomeVector, "mutate", _identity_mutate)
+    _pin_uniform_draw_to_father(restored._rng)
     restored._give_birth()
 
     assert restored.pending_offspring_list
@@ -259,7 +270,7 @@ def test_save_load_keeps_genome_cap_and_conception_snapshot(
     assert child.genome is not None
     assert child.parents[1] == father.agent_id
     assert child.generation == 6
-    assert child.genome.genes["lt_max_lifespan_factor"] == pytest.approx(1.25)
+    assert child.genome.genes["lt_max_lifespan_factor"] == pytest.approx(2.0)
     assert child.genome_inheritance_meta["mode"] == "recombined"
     assert child.mortality_system.max_lifespan_age_s == pytest.approx(
         _colony_max_lifespan_age_s(child.genome)

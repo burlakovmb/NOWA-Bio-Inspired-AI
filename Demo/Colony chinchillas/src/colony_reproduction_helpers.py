@@ -18,18 +18,3 @@ def choose_litter_size(rng: random.Random | None = None) -> int:
     return random_source.randint(*LITTER_SIZE)
 
 
-def inherit_scalar(
-    mother_value: float,
-    father_value: float | None,
-    *,
-    noise_sigma: float = 0.05,
-    rng: random.Random | None = None,
-) -> float:
-    """Simple average inheritance with gaussian noise."""
-    random_source = rng if rng is not None else random
-    if father_value is None:
-        base = mother_value
-    else:
-        base = (mother_value + father_value) / 2.0
-    inherited = base + random_source.gauss(0.0, noise_sigma)
-    return max(0.0, min(1.0, inherited))

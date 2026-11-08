@@ -60,7 +60,6 @@ from config_colony import (
 from heat_cycle import HeatCycle
 from colony_reproduction_helpers import (
     choose_litter_size,
-    inherit_scalar,
     resource_blocks_reproduction,
 )
 from sensor_system import ADJACENT_ZONES, is_same_or_adjacent
@@ -88,6 +87,9 @@ WAKEFULNESS_ACCUMULATION_FACTOR = 30.0
 # setting stretches one decision over a longer dt. The body still
 # integrates in these slices, so rest and cost stay on the 1x clock.
 COLONY_BODY_STEP_S = 1.0 / 12.0
+# Neonatal energy matches EnergySystem's rested start (1.0). A kit does not
+# inherit the parents' current balance: that is metabolic state, not an allele.
+NEWBORN_ENERGY = 1.0
 STUCK_MOVE_TIMEOUT_S = 10.0
 MIN_ACTION_MOVE_INTERVAL_S = 1.25
 RESOURCE_BLOCK_FEEDBACK_COOLDOWN_S = 4.0
@@ -2176,56 +2178,25 @@ class ChinchillaAgent(Agent):
         mother: "ChinchillaAgent",
         father: "ChinchillaAgent | None",
     ) -> None:
-        parents = [p for p in [mother, father] if p is not None]
+        """Mendelian genome plus the kit's own starting physiology.
 
-        for nm_attr in ["dopamine", "serotonin", "norepinephrine", "cortisol", "acetylcholine"]:
-            parent_vals: list[float] = []
-            for p in parents:
-                val = getattr(p.neuromodulators, nm_attr, None)
-                if val is not None:
-                    parent_vals.append(float(val))
-            if parent_vals:
-                inherited = sum(parent_vals) / len(parent_vals)
-                noise = self._rng.gauss(0.0, 0.05)
-                new_val = _clamp(inherited + noise, 0.0, 1.0)
-                try:
-                    setattr(self.neuromodulators, nm_attr, new_val)
-                except Exception:
-                    pass
-
-        for axis in ["valence", "arousal", "stress", "curiosity", "trust", "attachment"]:
-            parent_decays: list[float] = []
-            for p in parents:
-                decay = p.affective_space.axis_decay.get(axis)
-                if decay is not None:
-                    parent_decays.append(float(decay))
-            if parent_decays:
-                inherited = sum(parent_decays) / len(parent_decays)
-                noise = self._rng.gauss(0.0, 0.02)
-                self.affective_space.axis_decay[axis] = _clamp(inherited + noise, 0.5, 0.99)
-
-        self.social_drive = inherit_scalar(
-            mother.social_drive,
-            father.social_drive if father else None,
-            rng=self._rng,
-        )
-        self.energy = inherit_scalar(
-            mother.energy,
-            father.energy if father else None,
-            noise_sigma=0.03,
-            rng=self._rng,
-        )
-
+        Each gene is copied whole from one parent (uniform crossover), then
+        mutated. Momentary neuromodulator levels, affective decay, and the
+        parents' current social drive are not copied: decay and drive
+        baselines are written from the recombined genome, and levels stay at
+        the constructor baselines. Energy is the rested neonatal start, not
+        the mean of the parents' current balance.
+        """
         paternal_genome = _father_genome_for_birth(mother, father)
         if mother.genome is not None and paternal_genome is not None:
             try:
-                child_genome, _ = mother.genome.crossover(
+                recombined, _ = mother.genome.crossover(
                     paternal_genome,
-                    alpha=0.5,
-                    mode="arithmetic",
+                    mode="uniform",
                     rng=self._rng,
                 )
-                child_genome = child_genome.mutate(rate=0.05, rng=self._rng)
+                pre_genes = dict(getattr(recombined, "genes", {}) or {})
+                child_genome = recombined.mutate(rate=0.05, rng=self._rng)
                 self.genome = child_genome
                 self.mortality_system.max_lifespan_age_s = _colony_max_lifespan_age_s(self.genome)
                 mother_id = str(getattr(mother, "agent_id", "") or "")
@@ -2246,18 +2217,21 @@ class ChinchillaAgent(Agent):
                 father_weight_sum = 0.0
                 reconstructed_genes = 0
                 per_gene_shift: list[tuple[str, float]] = []
+                mother_genes = getattr(mother.genome, "genes", {}) or {}
+                father_genes = getattr(paternal_genome, "genes", {}) or {}
                 for key, child_val in (getattr(child_genome, "genes", {}) or {}).items():
-                    m_val = float((getattr(mother.genome, "genes", {}) or {}).get(key, child_val))
-                    f_val = float((getattr(paternal_genome, "genes", {}) or {}).get(key, child_val))
+                    m_val = float(mother_genes.get(key, child_val))
+                    f_val = float(father_genes.get(key, child_val))
                     c_val = float(child_val)
+                    allele = float(pre_genes.get(key, c_val))
                     midpoint = (m_val + f_val) / 2.0
                     shift = c_val - midpoint
                     midpoint_abs_shift_sum += abs(shift)
                     per_gene_shift.append((str(key), shift))
-                    span = (f_val - m_val)
+                    span = f_val - m_val
                     if abs(span) <= eps:
                         continue
-                    mother_weight = max(0.0, min(1.0, (f_val - c_val) / span))
+                    mother_weight = max(0.0, min(1.0, (f_val - allele) / span))
                     father_weight = 1.0 - mother_weight
                     mother_weight_sum += mother_weight
                     father_weight_sum += father_weight
@@ -2272,8 +2246,7 @@ class ChinchillaAgent(Agent):
                     "mother_name": mother_name,
                     "father_name": father_name,
                     "lineage_id": str(getattr(child_genome, "lineage_id", "") or ""),
-                    "crossover_mode": "arithmetic",
-                    "crossover_alpha": 0.5,
+                    "crossover_mode": "uniform",
                     "mutation_rate": 0.05,
                     "gene_count": int(len((getattr(child_genome, "genes", {}) or {}))),
                     "reconstructed_genes": int(reconstructed_genes),
@@ -2320,6 +2293,7 @@ class ChinchillaAgent(Agent):
                 paternal_genome is not None,
                 getattr(father, "agent_id", None) or getattr(mother, "_conception_father_id", None),
             )
+        self.energy = NEWBORN_ENERGY
 
     def _inherit_from(self, mother: "ChinchillaAgent", father: "ChinchillaAgent" | None) -> None:
         """Backward-compatible alias for older colony code."""

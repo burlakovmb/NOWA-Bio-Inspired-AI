@@ -92,17 +92,23 @@ def test_tc06_sleep_triggered_by_high_wakefulness() -> None:
     assert float(agent.wakefulness.wakefulness) < before
 
 
-def test_tc07_inherit_neuromodulators_from_parents() -> None:
+def test_tc07_newborn_does_not_inherit_parent_neuromodulator_levels() -> None:
     mother = ChinchillaAgent(sex="F")
     father = ChinchillaAgent(sex="M")
 
     mother.neuromodulators.serotonin = 0.8
     father.neuromodulators.serotonin = 0.4
+    mother.neuromodulators.cortisol = 0.95
 
     child = ChinchillaAgent(sex="F", age=0.0)
+    serotonin = float(child.neuromodulators.serotonin)
+    cortisol = float(child.neuromodulators.cortisol)
     child._inherit_nowa_from(mother, father)
 
-    assert 0.3 <= child.neuromodulators.serotonin <= 0.9
+    assert child.neuromodulators.serotonin == serotonin
+    assert child.neuromodulators.cortisol == cortisol
+    assert serotonin < 0.3
+    assert cortisol < 0.2
 
 
 def test_tc08_compute_affect_tone_uses_affective_space() -> None:

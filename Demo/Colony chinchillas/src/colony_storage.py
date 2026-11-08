@@ -205,6 +205,7 @@ class ColonyStorage:
                 "frustration_events": list(agent.frustration_events),
                 "social_drive": _f(agent.social_drive),
                 "energy": _f(agent.energy),
+                "neuromodulator_levels": self._serialize_neuromodulator_levels(agent),
                 "lived_steps": _i(getattr(agent, "lived_steps", 0)),
                 "hippocampus_experience_count": _i(len(getattr(agent.hippocampus, "experiences", []))),
                 "scent_signature": agent.scent_signature,
@@ -227,6 +228,9 @@ class ColonyStorage:
                 "attachment": _f(agent.attachment_level),
             },
             "genome": self._serialize_genome(getattr(agent, "genome", None)),
+            "genome_inheritance_meta": self._serialize_inheritance_meta(
+                getattr(agent, "genome_inheritance_meta", None)
+            ),
             "reproduction": {
                 "is_mature": bool(agent.is_mature),
                 "is_pregnant": bool(agent.is_pregnant),
@@ -296,6 +300,8 @@ class ColonyStorage:
         agent.frustration_events = list(runtime.get("frustration_events", []) or [])
         agent.social_drive = _f(runtime.get("social_drive", 0.45), 0.45)
         agent.energy = _f(runtime.get("energy", 1.0), 1.0)
+        if "neuromodulator_levels" in runtime:
+            self._restore_neuromodulator_levels(agent, runtime.get("neuromodulator_levels"))
         agent.lived_steps = _i(runtime.get("lived_steps", getattr(agent, "lived_steps", 0)))
         agent._loaded_chain_history = list(runtime.get("chain_history", []) or [])
         agent.scent_signature = str(runtime.get("scent_signature", agent.scent_signature))
@@ -332,6 +338,13 @@ class ColonyStorage:
         # constructor default: no genome, colony lifespan cap.
         agent.genome = self._deserialize_genome(payload.get("genome"))
         agent.mortality_system.max_lifespan_age_s = _colony_max_lifespan_age_s(agent.genome)
+        # Genotype is re-applied from the saved genome. Momentary energy,
+        # social drive, and neuromodulator levels are put back afterwards.
+        self._apply_saved_genome(agent)
+        if "genome_inheritance_meta" in payload:
+            agent.genome_inheritance_meta = self._deserialize_inheritance_meta(
+                payload.get("genome_inheritance_meta")
+            )
         agent._conception_father_genome = self._deserialize_genome(
             reproduction.get("conception_father_genome")
         )
@@ -375,6 +388,95 @@ class ColonyStorage:
             return GenomeVector.from_dict(payload)
         except (TypeError, ValueError, AttributeError):
             return None
+
+    def _serialize_inheritance_meta(self, meta: Any) -> dict[str, Any]:
+        if not isinstance(meta, dict) or not meta:
+            return {}
+        try:
+            encoded = json.loads(json.dumps(meta))
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(encoded, dict):
+            return {}
+        return encoded
+
+    def _deserialize_inheritance_meta(self, payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        try:
+            encoded = json.loads(json.dumps(payload))
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(encoded, dict):
+            return {}
+        return encoded
+
+    def _serialize_neuromodulator_levels(self, agent: ChinchillaAgent) -> dict[str, float]:
+        neuromodulators = getattr(agent, "neuromodulators", None)
+        if neuromodulators is None:
+            return {}
+        levels: dict[str, float] = {}
+        for name in ("dopamine", "norepinephrine", "serotonin", "cortisol", "acetylcholine"):
+            if not hasattr(neuromodulators, name):
+                continue
+            levels[name] = _f(getattr(neuromodulators, name))
+        return levels
+
+    def _restore_neuromodulator_levels(self, agent: ChinchillaAgent, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        neuromodulators = getattr(agent, "neuromodulators", None)
+        if neuromodulators is None:
+            return
+        restored = False
+        for name in ("dopamine", "norepinephrine", "serotonin", "cortisol", "acetylcholine"):
+            if name not in payload:
+                continue
+            try:
+                setattr(neuromodulators, name, _f(payload.get(name)))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            restored = True
+        if restored and hasattr(neuromodulators, "_clamp_all"):
+            try:
+                neuromodulators._clamp_all()
+            except Exception:
+                pass
+
+    def _apply_saved_genome(self, agent: ChinchillaAgent) -> None:
+        """Write genotype onto the agent, then put momentary state back.
+
+        ``_apply_genome_to_agent`` rebuilds the autonomous runtime and sets
+        drive baselines. Energy, the current social drive, and neuromodulator
+        concentrations are phenotype and stay at the values already restored
+        from the save.
+        """
+        genome = getattr(agent, "genome", None)
+        to_agent_params = getattr(genome, "to_agent_params", None)
+        if genome is None or not callable(to_agent_params):
+            return
+        try:
+            params = to_agent_params()
+        except Exception:
+            return
+        if not isinstance(params, dict):
+            return
+
+        energy = float(agent.energy)
+        social_drive = float(agent.social_drive)
+        levels = self._serialize_neuromodulator_levels(agent)
+        try:
+            from agent_factory import AgentConfig, AgentFactory
+
+            with initializing():
+                AgentFactory(
+                    AgentConfig(actions=list(getattr(agent, "base_abilities", ()) or ()))
+                )._apply_genome_to_agent(agent, params)
+        except Exception:
+            pass
+        agent.energy = energy
+        agent.social_drive = social_drive
+        self._restore_neuromodulator_levels(agent, levels)
 
     def _serialize_pending_offer(self, pending: PendingOffer | None) -> dict[str, Any] | None:
         if pending is None:
