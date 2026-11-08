@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import math
 from pathlib import Path
 
 from colony_agent import ChinchillaAgent
 from colony_storage import ColonyStorage
+from genome import GenomeVector
 from simulation_runner import SimulationRunner
 
 
@@ -111,3 +114,115 @@ def test_storage_preserves_extended_death_log_fields(tmp_path: Path) -> None:
     assert entry["cause_of_death"] == "exhaustion"
     assert entry["recorded_at_utc"] == "2026-04-07T12:00:00+00:00"
     assert entry["energy"] == 0.01
+
+def _close(actual: float, expected: float) -> None:
+    assert math.isclose(float(actual), float(expected), rel_tol=0.0, abs_tol=1e-6)
+
+
+def _genome_with(**overrides: float) -> GenomeVector:
+    genes = dict(GenomeVector.default().genes)
+    genes.update(overrides)
+    return GenomeVector(genes=genes, generation=2, lineage_id="line-65")
+
+
+def test_storage_roundtrip_keeps_genome_temperament_and_lineage(tmp_path: Path) -> None:
+    genome = _genome_with(
+        af_decay_stress=0.88,
+        af_lambda_reg=0.09,
+        dr_social_drive_baseline=0.40,
+        dr_social_threshold=0.62,
+        nm_decay_half_life=150.0,
+    )
+    agent = ChinchillaAgent(
+        sex="F",
+        name="Mira",
+        age=120.0,
+        generation=2,
+        genome=genome,
+        is_mature=True,
+    )
+    agent.energy = 0.37
+    agent.social_drive = 0.15
+    agent.neuromodulators.dopamine = 0.61
+    agent.neuromodulators.cortisol = 0.44
+    agent.genome_inheritance_meta = {
+        "mode": "recombined",
+        "mother_id": "mom-1",
+        "father_id": "dad-1",
+        "mother_name": "Ada",
+        "father_name": "Lin",
+        "lineage_id": "line-65",
+        "crossover_mode": "uniform",
+        "mutation_rate": 0.05,
+        "top_shifted_genes": [{"gene": "af_decay_stress", "midpoint_shift": 0.04}],
+    }
+
+    runner = SimulationRunner()
+    runner.add_agent(agent)
+    storage = ColonyStorage(save_dir=tmp_path)
+    loaded = storage.load_colony(storage.save_colony(runner, "genome.json"))
+    restored = loaded.agents[0]
+
+    _close(restored.affective_space.axis_decay["stress"], 0.88)
+    _close(restored.affective_space.lambda_reg, 0.09)
+    _close(restored.neuromodulators.DECAY_HALF_LIFE, 150.0)
+    _close(restored.autonomous_runtime.hard_limits.drive_thresholds["social_drive"], 0.62)
+    _close(restored.social_drive, 0.15)
+    _close(restored.energy, 0.37)
+    _close(restored.neuromodulators.dopamine, 0.61)
+    _close(restored.neuromodulators.cortisol, 0.44)
+    assert restored.genome_inheritance_meta["mode"] == "recombined"
+    assert restored.genome_inheritance_meta["crossover_mode"] == "uniform"
+    assert restored.genome_inheritance_meta["mother_id"] == "mom-1"
+    assert restored.genome_inheritance_meta["father_name"] == "Lin"
+    assert restored.genome_inheritance_meta["top_shifted_genes"] == [
+        {"gene": "af_decay_stress", "midpoint_shift": 0.04}
+    ]
+
+
+def test_storage_old_save_without_new_fields_reapplies_genome(tmp_path: Path) -> None:
+    genome = _genome_with(af_decay_stress=0.88, dr_social_drive_baseline=0.40)
+    agent = ChinchillaAgent(sex="M", name="Old", genome=genome, is_mature=True)
+    agent.energy = 0.42
+    agent.social_drive = 0.31
+
+    runner = SimulationRunner()
+    runner.add_agent(agent)
+    storage = ColonyStorage(save_dir=tmp_path)
+    path = Path(storage.save_colony(runner, "legacy.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    saved_agent = payload["agents"][0]
+    saved_agent.pop("genome_inheritance_meta", None)
+    saved_agent["runtime"].pop("neuromodulator_levels", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = storage.load_colony(path)
+    restored = loaded.agents[0]
+    _close(restored.affective_space.axis_decay["stress"], 0.88)
+    _close(restored.social_drive, 0.31)
+    _close(restored.energy, 0.42)
+    assert restored.genome_inheritance_meta == {}
+    assert restored.genome is not None
+
+
+def test_storage_old_save_without_genome_loads(tmp_path: Path) -> None:
+    agent = ChinchillaAgent(sex="F", name="Plain", is_mature=False)
+    agent.energy = 0.58
+
+    runner = SimulationRunner()
+    runner.add_agent(agent)
+    storage = ColonyStorage(save_dir=tmp_path)
+    path = Path(storage.save_colony(runner, "nogenome.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    saved_agent = payload["agents"][0]
+    saved_agent.pop("genome", None)
+    saved_agent.pop("genome_inheritance_meta", None)
+    saved_agent["runtime"].pop("neuromodulator_levels", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = storage.load_colony(path)
+    restored = loaded.agents[0]
+    assert restored.genome is None
+    assert restored.genome_inheritance_meta == {}
+    _close(restored.affective_space.axis_decay["stress"], 0.75)
+    _close(restored.energy, 0.58)
