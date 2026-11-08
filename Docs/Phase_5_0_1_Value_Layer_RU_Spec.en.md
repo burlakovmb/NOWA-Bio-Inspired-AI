@@ -96,7 +96,7 @@ V(s) by default = 0.0
 ### 4.1 Constraints
 
 -   δ_t clamp \[-1, 1\]
--   V(s) clamp \[-1, 1\]
+-   \|V(s)\| ≤ 1 / (1 − γ) for \|r\| ≤ 1; default γ = 0.95 → 20 (see [issue-18-minor-learning-fixes.en.md](specs/issue-18-minor-learning-fixes.en.md))
 -   One update per tick
 
 ### 4.2 Recommended Parameters
@@ -186,7 +186,7 @@ Expected: δ ≈ 0 dopamine_delta ≈ 0 V(s_t) is stable
 
 -   10_000 updates
 -   Check:
-    -   V does not leave \[-1, 1\]
+    -   V stays within \|V\| ≤ 1 / (1 − γ) for the active γ and \|r\| ≤ 1
     -   There is no neuromodulator_drift
     -   Stability index \> 0.6
 
