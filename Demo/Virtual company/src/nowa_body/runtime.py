@@ -70,6 +70,7 @@ class BusinessAgentRuntime(PlatformAgentRuntime):
         param_bindings: Optional[Dict[str, Any]] = None,
         field_aliases: Optional[Dict[str, Any]] = None,
         event_classifier: Optional[Callable[..., Any]] = None,
+        outcome_judge: Any = None,
         business_limits: Any = None,
         limit_notifier: Optional[Callable[[Dict[str, Any]], None]] = None,
         **host_compat: Any,
@@ -88,6 +89,10 @@ class BusinessAgentRuntime(PlatformAgentRuntime):
             event_classifier=event_classifier,
             **host_compat,
         )
+        # Role-supplied judge of delayed consequences: sees every decision
+        # and the world after it, returns lessons once the world has answered
+        # (a delivery closed the deficit, a shelf ran empty while waiting).
+        self.outcome_judge = outcome_judge
         # Role-declared business limits: checked after binding,
         # before the approval gate. Accepts raw config rows or parsed limits.
         self.business_limits = (
@@ -114,6 +119,9 @@ class BusinessAgentRuntime(PlatformAgentRuntime):
         now = now or datetime.now()
         result = self._run_decision_cycle(observations or {}, dt=self._host_dt(now))
         self._accumulate_wakefulness()
+        lessons = self._judge_outcomes(observations or {}, result, now)
+        if lessons:
+            result["lessons"] = lessons
         scheduler = self.sleep_scheduler
         if scheduler is not None and hasattr(scheduler, "should_sleep"):
             should_sleep, reason = scheduler.should_sleep(self.agent, now=now)
@@ -336,6 +344,30 @@ class BusinessAgentRuntime(PlatformAgentRuntime):
             })
         except Exception:
             return
+
+    def _judge_outcomes(
+        self,
+        observations: Dict[str, Any],
+        result: Dict[str, Any],
+        now: datetime,
+    ) -> List[str]:
+        """Ask the outcome judge for lessons and file them; returns consequences."""
+        judge = getattr(self.outcome_judge, "observe", None)
+        if not callable(judge):
+            return []
+        try:
+            lessons = list(judge(observations, result, now) or [])
+        except Exception:
+            return []
+        filed: List[str] = []
+        for lesson in lessons:
+            try:
+                context, action, reward, consequence = lesson
+            except (TypeError, ValueError):
+                continue
+            if self.teach(context, action, reward, consequence=str(consequence)) is not None:
+                filed.append(str(consequence))
+        return filed
 
     def _host_dt(self, now: datetime) -> float:
         """Host seconds since the previous cycle; the core never reads the wall clock.

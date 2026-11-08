@@ -75,6 +75,8 @@ def save_checkpoint(
 
     agent_path = _agent_state_path(meta_path)
     saved_agent = _save_agent_state(agent, agent_path)
+    if saved_agent:
+        _save_intent_memory_extension(agent, agent_path)
 
     checkpoint = SandboxCheckpoint(
         last_quarter=len(result.quarters),
@@ -114,12 +116,46 @@ def restore_agent(checkpoint: SandboxCheckpoint, agent: Any) -> bool:
         return False
 
     restored = _load_agent_state(agent, agent_path)
+    if restored:
+        _load_intent_memory_extension(agent, agent_path)
     if restored and checkpoint.genome is not None:
         try:
             agent.genome = checkpoint.genome
         except Exception:
             pass
     return restored
+
+
+def _save_intent_memory_extension(agent: Any, agent_path: Path) -> None:
+    """Persist learned sandbox habits omitted by core AgentStorage."""
+    intent_memory = getattr(agent, "intent_memory", None)
+    to_dict = getattr(intent_memory, "to_dict", None)
+    if not callable(to_dict):
+        return
+    with agent_path.open("rb") as handle:
+        state = pickle.load(handle)
+    if not isinstance(state, dict):
+        return
+    state["sandbox_intent_memory"] = to_dict()
+    with agent_path.open("wb") as handle:
+        pickle.dump(state, handle)
+
+
+def _load_intent_memory_extension(agent: Any, agent_path: Path) -> None:
+    """Restore sandbox habits when present; old checkpoint files remain valid."""
+    with agent_path.open("rb") as handle:
+        state = pickle.load(handle)
+    if not isinstance(state, dict) or "sandbox_intent_memory" not in state:
+        return
+    ensure_core_src_on_path()
+    from intent_memory import IntentMemory
+    from learning_guard import initializing
+
+    with initializing():
+        agent.intent_memory = IntentMemory.from_dict(state["sandbox_intent_memory"])
+        manager = getattr(agent, "sleep_manager", None)
+        if manager is not None:
+            manager.intent_memory = agent.intent_memory
 
 
 # ---------------------------------------------------------------------
@@ -230,9 +266,21 @@ def _load_agent_state(agent: Any, agent_path: Path) -> bool:
             conflict_arbitration=getattr(agent, "conflict_arbitration", None),
             agent=agent,
         )
+        _rebind_learning_components(agent)
         return True
     except Exception:
         return False
+
+
+def _rebind_learning_components(agent: Any) -> None:
+    """Keep sleep consolidation pointed at components restored onto the agent."""
+    manager = getattr(agent, "sleep_manager", None)
+    if manager is None:
+        return
+    for name in ("labile", "plasticity"):
+        current = getattr(agent, name, None)
+        if current is not None:
+            setattr(manager, name, current)
 
 
 def _extract_genome(agent: Any) -> Any:

@@ -175,6 +175,16 @@ class SandboxTrainer:
         self.encoder = encoder
         self.fitness_evaluator = fitness_evaluator
         self.sleep_every_n_days = max(1, int(sleep_every_n_days))
+        plasticity = getattr(self.agent, "plasticity", None)
+        if plasticity is not None and hasattr(plasticity, "expected_wake_interval_s"):
+            plasticity.expected_wake_interval_s = self.sleep_every_n_days * 86400.0
+        sleep_manager = getattr(self.agent, "sleep_manager", None)
+        if sleep_manager is not None:
+            if plasticity is not None:
+                sleep_manager.plasticity = plasticity
+            labile = getattr(self.agent, "labile", None)
+            if labile is not None:
+                sleep_manager.labile = labile
         self.stage_1a_baseline = dict(stage_1a_baseline or {})
         self.stage_1a_spread_iqr = dict(stage_1a_spread_iqr or {})
         self.last_decision_log: List[dict] = []
@@ -413,7 +423,7 @@ class SandboxTrainer:
                 last_order_result = None
 
             activation_before = self._activation_snapshot()
-            action_intent = self._agent_step(context_events)
+            action_intent = self._agent_step(context_events, dt=86400.0)
             action_type = self._intent_to_action_type(action_intent)
             activated_count = self._activated_since(activation_before)
 
@@ -479,7 +489,7 @@ class SandboxTrainer:
 
         return decision_log
 
-    def _agent_step(self, context_events: List[str]) -> Any:
+    def _agent_step(self, context_events: List[str], dt: float = 86400.0) -> Any:
         """Let the agent run its hippocampus→selector→BG→thalamus pipeline.
 
         Asks for a decision only, when the agent supports it: this loop records
@@ -494,11 +504,20 @@ class SandboxTrainer:
         """
         step_fn = getattr(self.agent, "step", None)
         if not callable(step_fn):
+            advance = getattr(self.agent, "advance_time", None)
+            if callable(advance):
+                advance(float(dt))
             return "wait_and_monitor"
+        kwargs: Dict[str, Any] = {}
         if self._accepts_decision_only(step_fn):
-            result = step_fn(context_events, decision_only=True)
+            kwargs["decision_only"] = True
+        if self._accepts_parameter(step_fn, "dt"):
+            kwargs["dt"] = float(dt)
         else:
-            result = step_fn(context_events)
+            advance = getattr(self.agent, "advance_time", None)
+            if callable(advance):
+                advance(float(dt))
+        result = step_fn(context_events, **kwargs)
         if result is not None:
             return result
         for attr in ("last_intent", "last_action", "current_action"):
@@ -506,6 +525,18 @@ class SandboxTrainer:
             if value is not None:
                 return value
         return "wait_and_monitor"
+
+    @staticmethod
+    def _accepts_parameter(step_fn: Callable[..., Any], name: str) -> bool:
+        """Only an explicit parameter proves support; **kwargs may ignore dt."""
+        try:
+            parameter = inspect.signature(step_fn).parameters.get(name)
+        except (TypeError, ValueError):
+            return False
+        return parameter is not None and parameter.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
 
     @staticmethod
     def _accepts_decision_only(step_fn: Callable[..., Any]) -> bool:
@@ -604,7 +635,7 @@ class SandboxTrainer:
                 "order_accepted" if status == "accepted" else "order_rejected"
             )
             consequence = self._seeder._build_consequence(consequence_label)
-            store_fn(
+            stored = store_fn(
                 path,
                 consequence=consequence,
                 intensity=abs(reward),
@@ -612,6 +643,18 @@ class SandboxTrainer:
             )
         except Exception:
             return
+        record_fn = getattr(self.agent, "_record_known_outcome", None)
+        if stored is not None and callable(record_fn):
+            action_id = str(order_params.strategy)
+            stored.replay_action_id = action_id
+            stored.context_events = list(context_events)
+            record_fn(
+                context_events=list(context_events),
+                action_id=action_id,
+                outcome=reward,
+                episode=stored,
+                intensity=abs(reward),
+            )
 
     @staticmethod
     def _prepare_stock_observation(world: ProcurementWorld) -> Dict[str, dict]:
@@ -735,8 +778,15 @@ class SandboxTrainer:
         self._emit_pipeline(f"         -> affective_feedback: {rendered}")
 
     def _agent_sleep(self) -> None:
+        sleep_fn = getattr(self.agent, "sleep", None)
+        if callable(sleep_fn):
+            if self._accepts_parameter(sleep_fn, "cycles"):
+                sleep_fn(cycles=1)
+            else:
+                sleep_fn()
+            return
         sleep_manager = getattr(self.agent, "sleep_manager", None)
-        if sleep_manager is not None and hasattr(sleep_manager, "sleep_cycle"):
+        if sleep_manager is not None and callable(getattr(sleep_manager, "sleep_cycle", None)):
             sleep_manager.sleep_cycle()
 
 

@@ -47,6 +47,7 @@ class RoleConfig:
     mcp_servers: List[Dict[str, Any]] = None
     event_classifier_paths: List[str] = None
     token_rules: Dict[str, Any] = None
+    outcome_judge_path: str = ""
     business_limits: List[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
@@ -107,6 +108,7 @@ def load_role_config_from_mapping(raw: Any, path: str) -> RoleConfig:
     field_aliases = raw.get("field_aliases") if isinstance(raw.get("field_aliases"), dict) else {}
     param_bindings = raw.get("param_bindings") if isinstance(raw.get("param_bindings"), dict) else {}
     token_rules = raw.get("token_rules") if isinstance(raw.get("token_rules"), dict) else {}
+    outcome_judge_path = str(raw.get("outcome_judge") or "").strip()
     business_limits = [row for row in (raw.get("business_limits") or []) if isinstance(row, dict)]
     mcp_servers = _parse_mcp_servers(raw.get("mcp_servers"), path)
     if not mcp_servers:
@@ -134,6 +136,7 @@ def load_role_config_from_mapping(raw: Any, path: str) -> RoleConfig:
             [event_classifier_path] if event_classifier_path else []
         ),
         token_rules=dict(token_rules or {}),
+        outcome_judge_path=outcome_judge_path,
         business_limits=business_limits,
     )
     validate_role_config(config)  # raises on cross-reference mismatches
@@ -525,6 +528,28 @@ def resolve_event_classifier(config: RoleConfig) -> Optional[Callable[[str, dict
     return overlay
 
 
+def build_outcome_judge(config: RoleConfig) -> Optional[Any]:
+    """Instantiate the role's delayed-consequence judge, or None when unset.
+
+    ``outcome_judge`` names a class (or factory) whose instances have
+    ``observe(observations, result, now) -> [(context, action, reward, consequence)]``.
+    """
+    ref = str(getattr(config, "outcome_judge_path", "") or "").strip()
+    if not ref:
+        return None
+    factory = _import_ref(ref, config.source_path, "outcome_judge")
+    if not callable(factory):
+        raise RoleConfigError(
+            f"{config.source_path}: outcome_judge '{ref}' is not callable"
+        )
+    judge = factory()
+    if not callable(getattr(judge, "observe", None)):
+        raise RoleConfigError(
+            f"{config.source_path}: outcome_judge '{ref}' has no observe()"
+        )
+    return judge
+
+
 def _import_ref(ref: str, path: str, field_name: str) -> Any:
     module_path, _, attr_name = ref.partition(":")
     if not module_path or not attr_name:
@@ -555,4 +580,5 @@ __all__ = [
     "build_seeder",
     "resolve_motor_adapter",
     "resolve_event_classifier",
+    "build_outcome_judge",
 ]
