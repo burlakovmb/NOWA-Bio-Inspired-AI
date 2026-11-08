@@ -43,7 +43,7 @@ English: [issue-27-inheritance.en.md](issue-27-inheritance.en.md)
 | --- | --- |
 | `Demo/Colony chinchillas/src/colony_agent.py` | `NEWBORN_ENERGY`; `_inherit_nowa_from`: uniform, `pre_genes` для meta, удалено усреднение NM/affect/social/energy; обновлён `genome_inheritance_meta`; `self.energy = NEWBORN_ENERGY`. |
 | `Demo/Colony chinchillas/src/colony_reproduction_helpers.py` | Удалён `inherit_scalar`. |
-| `.github/workflows/tests.yml` | `push` только на `main`; `concurrency` `tests-${{ github.ref }}`, `cancel-in-progress: true` (нет двойного прогона на push ветки + PR). |
+| `.github/workflows/tests.yml` | `push` только на `main`; `concurrency` `tests-${{ github.ref }}`, `cancel-in-progress: true` (отменяет устаревшие прогоны на том же ref). Двойной прогон push ветки + PR убирает `push.branches: [main]`, а не общая concurrency-группа. |
 | `Demo/Colony chinchillas/tests/test_issue27_inheritance.py` | Новый приёмочный набор для #27. |
 | `Demo/Colony chinchillas/tests/test_issue24_silent_failures.py` | Ожидания под uniform (фиксация RNG на аллели отца). |
 | `Demo/Colony chinchillas/tests/test_nowa_agent.py` | `test_tc07_*`: новорождённый **не** копирует уровни NM родителей. |
@@ -67,7 +67,7 @@ English: [issue-27-inheritance.en.md](issue-27-inheritance.en.md)
 
 | Область | Влияние |
 | --- | --- |
-| Save/load | Схема без изменений; в meta старых рождений могут остаться `crossover_mode` / `crossover_alpha` до #27. |
+| Save/load | С #65 ([issue-65-save-genome.ru.md](issue-65-save-genome.ru.md)) `ColonyStorage` сохраняет и восстанавливает `genome_inheritance_meta` (после #27: `crossover_mode` = `"uniform"`, без `crossover_alpha`). В файлах до #65 ключа нет; при загрузке — `{}`. В сохранении может остаться legacy `crossover_alpha`, если агент родился до #27 и был сохранён после #65. |
 | Снимок зачатия (#24) | По-прежнему для генома отца при его смерти; меняется только режим кроссовера. |
 | Ядро `src/` | Без изменений. Дефолт swarm `crossover_mode` — `arithmetic`. |
 | API | Алиас `_inherit_from` без изменений; `inherit_scalar` убран из helpers (только колония). |
