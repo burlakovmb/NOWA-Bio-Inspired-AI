@@ -42,3 +42,6 @@ is outside this repository checkpoint and must be corrected before reuse.
 After synchronization, independently check VC regressions, old checkpoint
 loading, sleep learning rates, persistence and new value bounds. Freeze a new
 versioned experiment before further learning. Existing minds remain preserved.
+
+Subsequent synchronization and its bounded checks are recorded separately in
+[the compatibility report](vc-upstream-compatibility-2026-11-08.en.md).
