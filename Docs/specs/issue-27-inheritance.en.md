@@ -43,7 +43,7 @@ Swarm evolution in `src/swarm.py` remains **arithmetic** by default; colony birt
 | --- | --- |
 | `Demo/Colony chinchillas/src/colony_agent.py` | `NEWBORN_ENERGY`; `_inherit_nowa_from` uniform crossover, `pre_genes` for meta, removed NM/affect/social/energy averaging; `genome_inheritance_meta` updated; `self.energy = NEWBORN_ENERGY` after inheritance. |
 | `Demo/Colony chinchillas/src/colony_reproduction_helpers.py` | Removed `inherit_scalar`. |
-| `.github/workflows/tests.yml` | `push` only on `main`; `concurrency` group `tests-${{ github.ref }}`, `cancel-in-progress: true` (avoids duplicate runs on branch push + PR). |
+| `.github/workflows/tests.yml` | `push` only on `main`; `concurrency` group `tests-${{ github.ref }}`, `cancel-in-progress: true` (cancels superseded runs on the same ref). Duplicate branch push + PR runs are avoided by `push.branches: [main]`, not by sharing a concurrency group. |
 | `Demo/Colony chinchillas/tests/test_issue27_inheritance.py` | New acceptance suite for #27. |
 | `Demo/Colony chinchillas/tests/test_issue24_silent_failures.py` | Expectations under uniform crossover (pin RNG to father alleles). |
 | `Demo/Colony chinchillas/tests/test_nowa_agent.py` | `test_tc07_*`: newborn does **not** copy parent NM levels. |
@@ -67,7 +67,7 @@ Other keys (`mode`, `mutation_rate`, `gene_count`, lineage, parent ids/names) un
 
 | Area | Impact |
 | --- | --- |
-| Saves / loads | No schema change; saved offspring meta may show old `crossover_mode` / `crossover_alpha` from pre-#27 births only. |
+| Saves / loads | As of #65 ([issue-65-save-genome.en.md](issue-65-save-genome.en.md)), `ColonyStorage` persists and restores `genome_inheritance_meta` (post-#27 births: `crossover_mode` is `"uniform"`, no `crossover_alpha`). Saves written before #65 omit that key; load yields `{}`. A save file may still contain legacy `crossover_alpha` in meta if the agent was born before #27 and saved after #65. |
 | Conception snapshot (#24) | Still used for paternal genome when father died; crossover mode change only affects recombination, not snapshot capture. |
 | Core `src/` | Unchanged. Swarm `crossover_mode` default remains `arithmetic`. |
 | API | `_inherit_from` alias unchanged; `inherit_scalar` removed from helpers (colony-only). |
