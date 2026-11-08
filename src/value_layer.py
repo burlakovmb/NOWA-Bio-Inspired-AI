@@ -562,11 +562,16 @@ class ValueLayer:
         self.alpha_online_default = _clamp(online_alpha, 0.001, float(self.alpha_online_soft_cap))
         self.alpha_default = float(self.alpha_online_default)
         self.alpha_sleep_ratio = alpha_sleep_ratio_value(self.alpha_sleep_ratio)
-        self.alpha_sleep_default = effective_alpha_sleep(
-            self.alpha_online_default,
-            self.alpha_sleep_default,
-            self.alpha_sleep_ratio,
-        )
+        # None means derive from the live alpha_online * ratio. Do not bake that
+        # product here: AgentFactory writes gene lr_alpha_online after construction,
+        # and a stored 0.0075 would then cap every faster gene. An explicit rate is
+        # kept as a request and capped later by effective_alpha_sleep.
+        if self.alpha_sleep_default is not None:
+            stored_sleep = _safe_float(self.alpha_sleep_default, -1.0)
+            if not math.isfinite(stored_sleep) or stored_sleep < 0.0:
+                self.alpha_sleep_default = None
+            else:
+                self.alpha_sleep_default = stored_sleep
         self.gamma_default = _clamp(_safe_float(self.gamma_default, 0.95), 0.0, 0.999)
         self.dopamine_scale = _clamp(_safe_float(self.dopamine_scale, 0.5), 0.0, 2.0)
         self.reward_scale = _clamp(_safe_float(self.reward_scale, 1.0), 1e-6, 1000.0)
@@ -835,7 +840,14 @@ class ValueLayer:
         acc_boost = _clamp(_safe_float(acc_learning_boost, 1.0), 0.5, 1.6)
         cer_stress = _clamp(_safe_float(cer_stress_level, 0.0), 0.0, 1.0)
         stress_scale = max(0.2, 1.0 - (0.5 * cer_stress))
-        alpha_default = self.alpha_sleep_default if mode_v == "sleep" else self.alpha_online_default
+        if mode_v == "sleep":
+            alpha_default = effective_alpha_sleep(
+                self.alpha_online_default,
+                self.alpha_sleep_default,
+                self.alpha_sleep_ratio,
+            )
+        else:
+            alpha_default = self.alpha_online_default
         alpha_input = _safe_float(alpha, alpha_default) * acc_boost * stress_scale
         reward_raw = _safe_float(reward)
         reward_scale_v = _clamp(_safe_float(reward_scale, self.reward_scale), 1e-6, 1000.0)
@@ -1099,12 +1111,8 @@ class ValueLayer:
             "similarity_transfer_quantile": float(self.similarity_transfer_quantile),
             "alpha_default": float(self.alpha_default),
             "alpha_online_default": float(self.alpha_online_default),
-            "alpha_sleep_default": float(
-                effective_alpha_sleep(
-                    self.alpha_online_default,
-                    self.alpha_sleep_default,
-                    self.alpha_sleep_ratio,
-                )
+            "alpha_sleep_default": (
+                None if self.alpha_sleep_default is None else float(self.alpha_sleep_default)
             ),
             "alpha_sleep_ratio": float(alpha_sleep_ratio_value(self.alpha_sleep_ratio)),
             "ach_alpha_gain": float(self.ach_alpha_gain),
@@ -1169,12 +1177,8 @@ class ValueLayer:
             "similarity_transfer_quantile": float(self.similarity_transfer_quantile),
             "alpha_default": float(self.alpha_default),
             "alpha_online_default": float(self.alpha_online_default),
-            "alpha_sleep_default": float(
-                effective_alpha_sleep(
-                    self.alpha_online_default,
-                    self.alpha_sleep_default,
-                    self.alpha_sleep_ratio,
-                )
+            "alpha_sleep_default": (
+                None if self.alpha_sleep_default is None else float(self.alpha_sleep_default)
             ),
             "alpha_sleep_ratio": float(alpha_sleep_ratio_value(self.alpha_sleep_ratio)),
             "ach_alpha_gain": float(self.ach_alpha_gain),

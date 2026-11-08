@@ -7,7 +7,9 @@ import math
 import pytest
 
 from agent import Agent
+from agent_factory import AgentConfig, AgentFactory
 from cortex import CortexMemory
+from genome import GENE_REGISTRY, GenomeVector
 from hippocampus import NOWAHippocampus
 from intent_memory import IntentMemory
 from learning_guard import learning_allowed
@@ -84,16 +86,109 @@ def test_default_alpha_sleep_is_derived_from_online_ratio():
     layer = ValueLayer()
     assert layer.alpha_online_default == pytest.approx(0.03)
     assert layer.alpha_sleep_ratio == pytest.approx(0.25)
-    assert layer.alpha_sleep_default == pytest.approx(0.25 * 0.03)
-    assert layer.alpha_sleep_default <= 0.25 * layer.alpha_online_default + 1e-12
+    # Derived stays unset so a later alpha_online (the gene) can raise sleep rate.
+    assert layer.alpha_sleep_default is None
+    assert effective_alpha_sleep(
+        layer.alpha_online_default,
+        layer.alpha_sleep_default,
+        layer.alpha_sleep_ratio,
+    ) == pytest.approx(0.0075)
 
-    # The historical 0.08 default is above the ratio and must be capped.
+    # The historical 0.08 request is above the ratio and is capped at use time.
     explicit = ValueLayer(alpha_online_default=0.03, alpha_sleep_default=0.08)
-    assert explicit.alpha_sleep_default == pytest.approx(0.0075)
+    assert explicit.alpha_sleep_default == pytest.approx(0.08)
+    assert effective_alpha_sleep(
+        explicit.alpha_online_default,
+        explicit.alpha_sleep_default,
+        explicit.alpha_sleep_ratio,
+    ) == pytest.approx(0.0075)
 
     # A tighter stored rate is kept.
     tighter = ValueLayer(alpha_online_default=0.03, alpha_sleep_default=0.001)
     assert tighter.alpha_sleep_default == pytest.approx(0.001)
+    assert effective_alpha_sleep(
+        tighter.alpha_online_default,
+        tighter.alpha_sleep_default,
+        tighter.alpha_sleep_ratio,
+    ) == pytest.approx(0.001)
+
+
+def _genome_with_alpha_online(alpha: float) -> GenomeVector:
+    genes = {key: descriptor.default for key, descriptor in GENE_REGISTRY.items()}
+    genes["lr_alpha_online"] = alpha
+    return GenomeVector(genes=genes)
+
+
+def test_factory_gene_alpha_online_derives_sleep_rate():
+    """Gene lr_alpha_online is applied after ValueLayer init and must set sleep rate."""
+    factory = AgentFactory(
+        AgentConfig(actions=["go"], hippocampus_capacity=32, cortex_capacity=32)
+    )
+    for gene, expected in ((0.051, 0.01275), (0.02, 0.005)):
+        agent = factory.spawn(_genome_with_alpha_online(gene))
+        layer = agent.value_layer
+        assert layer.alpha_online_default == pytest.approx(gene)
+        assert layer.alpha_sleep_default is None
+        assert effective_alpha_sleep(
+            layer.alpha_online_default,
+            layer.alpha_sleep_default,
+            layer.alpha_sleep_ratio,
+        ) == pytest.approx(expected)
+        assert agent.sleep_manager._resolved_alpha_sleep(layer, 1.0) == pytest.approx(expected)
+
+        saved = layer.to_dict()
+        assert saved["alpha_sleep_default"] is None
+        loaded = ValueLayer.from_dict(saved)
+        assert loaded.alpha_sleep_default is None
+        assert loaded.alpha_online_default == pytest.approx(gene)
+        assert effective_alpha_sleep(
+            loaded.alpha_online_default,
+            loaded.alpha_sleep_default,
+            loaded.alpha_sleep_ratio,
+        ) == pytest.approx(expected)
+
+    # Explicit request is a ceiling, still capped by the live ratio.
+    agent = factory.spawn(_genome_with_alpha_online(0.051))
+    layer = agent.value_layer
+    layer.alpha_sleep_default = 0.001
+    assert effective_alpha_sleep(
+        layer.alpha_online_default,
+        layer.alpha_sleep_default,
+        layer.alpha_sleep_ratio,
+    ) == pytest.approx(0.001)
+    layer.alpha_sleep_default = 0.02
+    assert effective_alpha_sleep(
+        layer.alpha_online_default,
+        layer.alpha_sleep_default,
+        layer.alpha_sleep_ratio,
+    ) == pytest.approx(0.01275)
+    layer.alpha_online_default = 0.08
+    assert effective_alpha_sleep(
+        layer.alpha_online_default,
+        layer.alpha_sleep_default,
+        layer.alpha_sleep_ratio,
+    ) == pytest.approx(0.02)
+
+    saved = layer.to_dict()
+    assert saved["alpha_sleep_default"] == pytest.approx(0.02)
+    loaded = ValueLayer.from_dict(saved)
+    assert loaded.alpha_sleep_default == pytest.approx(0.02)
+    assert effective_alpha_sleep(
+        loaded.alpha_online_default,
+        loaded.alpha_sleep_default,
+        loaded.alpha_sleep_ratio,
+    ) == pytest.approx(0.02)
+
+    # A numeric save from the old materialised default stays an explicit cap.
+    legacy = ValueLayer.from_dict(
+        {"alpha_online_default": 0.051, "alpha_sleep_default": 0.0075}
+    )
+    assert legacy.alpha_sleep_default == pytest.approx(0.0075)
+    assert effective_alpha_sleep(
+        legacy.alpha_online_default,
+        legacy.alpha_sleep_default,
+        legacy.alpha_sleep_ratio,
+    ) == pytest.approx(0.0075)
 
 
 def test_sleep_replay_applies_alpha_sleep_ratio():
