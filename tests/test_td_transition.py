@@ -50,10 +50,9 @@ def test_feedback_commits_one_td_update_and_reaches_the_reward():
     """One labile contribution per rating. Stable Q moves only in sleep.
 
     The old online writer could climb past 0.8 in the same loop. Stable Q
-    is replay-only, and the PR #35 per-cycle value budget (left unchanged)
-    lands at 0.225 after sleep(cycles=3) whether the loop is 10 or 80
-    episodes. 0.8 is not reachable without raising that cap. > 0.22 fails
-    if a cycle of replay is missing.
+    is replay-only. alpha_sleep is 0.25 * alpha_online, so sleep(cycles=3)
+    lands near 0.066 whether the loop is 10 or 80 episodes. > 0.05 fails
+    if a cycle of replay is missing (two cycles stay near 0.044).
     """
     agent = _build_agent(["go"])
     before = int(agent.value_layer.online_update_count)
@@ -74,7 +73,7 @@ def test_feedback_commits_one_td_update_and_reaches_the_reward():
     assert _effective(agent, ["goal"], "go") > 0.15
     assert _effective(agent, ["goal"], "go") <= 0.2 + 1e-9
     agent.sleep(cycles=3)
-    assert _q(agent, ["goal"], "go") > 0.22
+    assert _q(agent, ["goal"], "go") > 0.05
 
 
 def test_successor_value_is_the_real_next_state():
@@ -88,7 +87,7 @@ def test_successor_value_is_the_real_next_state():
             action_id=action,
         )
     agent.sleep(cycles=3)
-    assert _q(agent, successor, "go") > 0.22
+    assert _q(agent, successor, "go") > 0.05
 
     # Reward 0 on the way into a valuable successor must not stay at 0.
     # The waking backup is labile and uses max_a Q_eff(s', a). Stable Q(s)

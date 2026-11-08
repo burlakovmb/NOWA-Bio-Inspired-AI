@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import random
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from death_registry import DeathRegistry
 from birth_registry import BirthRegistry
 from colony_gui.utils import canonical_display_name
 from shared_resources import SharedResources
+
+logger = logging.getLogger(__name__)
 
 
 class SimulationRunner:
@@ -59,8 +62,19 @@ class SimulationRunner:
     def add_agent(self, agent: ChinchillaAgent) -> None:
         agent.colony = self.agents
         agent.resources = self.resources
-        self.agents.append(agent)
+        agent_id = str(getattr(agent, "agent_id", "") or "")
+        if agent_id and any(
+            str(getattr(existing, "agent_id", "") or "") == agent_id for existing in self.agents
+        ):
+            # Already in the colony. Do not append a second entry.
+            if self.swarm.get_agent(agent_id) is None:
+                self.swarm.add_agent(agent)
+            return
+        # The swarm decides the cap and the placement. The colony list
+        # gains the agent only after that call returns, so a refusal
+        # cannot leave a runner entry for the birth fallback to copy.
         self.swarm.add_agent(agent)
+        self.agents.append(agent)
         # Compute a canonical display name for the newborn and register the
         # birth in both registries. The canonical name follows GUI format
         # (e.g., G0A1SM) and is computed using the generation index map.
@@ -144,21 +158,21 @@ class SimulationRunner:
                 offspring.colony = self.agents
                 offspring.resources = self.resources
                 new_agents.append(offspring)
+        admitted = 0
         for offspring in new_agents:
-            # Use add_agent to ensure consistent registration hooks.
             try:
                 self.add_agent(offspring)
-            except Exception:
-                # Best-effort: fall back to manual insertion if add_agent fails.
-                self.agents.append(offspring)
-                try:
-                    self.swarm.add_agent(offspring)
-                except Exception:
-                    pass
-        if new_agents:
-            born_now = len(new_agents)
-            self.births_this_step += born_now
-            self.total_births += born_now
+            except (ValueError, RuntimeError) as exc:
+                logger.warning(
+                    "offspring %s was not admitted to the colony: %s",
+                    getattr(offspring, "agent_id", ""),
+                    exc,
+                )
+            else:
+                admitted += 1
+        if admitted:
+            self.births_this_step += admitted
+            self.total_births += admitted
 
     def _handle_agent_death(self, agent_id: str) -> None:
         dead_agent = next((agent for agent in self.agents if agent.agent_id == agent_id), None)

@@ -21,12 +21,17 @@ from colony_agent import (
     THIRST_CRITICAL_THRESHOLD,
     THIRST_NEED_THRESHOLD,
     ChinchillaAgent,
+    colony_scripted_old_age_s,
 )
 from colony_gui.app import format_speed_status_line
 from colony_gui.colony_gui import ColonyGUI
 from colony_gui.i18n import reset_language, set_language
 from colony_storage import ColonyStorage
-from config_colony import UNMET_THIRST_ENERGY_PER_S
+from config_colony import (
+    COLONY_MAX_LIFESPAN_AGE_S,
+    COLONY_MAX_LIFESPAN_STEPS,
+    UNMET_THIRST_ENERGY_PER_S,
+)
 from genome import GenomeVector
 from shared_resources import SharedResources
 from simulation_runner import SimulationRunner
@@ -389,3 +394,296 @@ def test_speed_line_shows_actual_rate_when_sim_lags() -> None:
         assert "факт x2.5" in russian
     finally:
         reset_language()
+
+
+def _age_until_old_age(dt: float) -> tuple[float, str, int]:
+    """Walk biological age with ``_age_step`` until old age.
+
+    ``_age_step`` is the colony clock that passes ``biological_age_s``.
+    It does not increment ``lived_steps``, so equal ages across ``dt``
+    are not an accident of equal decision counts.
+    """
+    agent = ChinchillaAgent(sex="F", rng_seed=1, age=0.0)
+    agent.energy = 0.9
+    agent.wakefulness.wakefulness = 0.2
+    agent.neuromodulators.cortisol = 0.05
+    agent.lived_steps = 3
+    cap = float(agent.mortality_system.max_lifespan_age_s)
+    limit = int(cap / dt) + 3
+    steps = 0
+    while not agent.mortality_system.is_dead() and steps < limit:
+        agent._age_step(dt)
+        steps += 1
+    assert agent.mortality_system.is_dead() is True
+    assert agent.lived_steps == 3
+    return float(agent.age), str(agent.mortality_system.cause_of_death), steps
+
+
+def test_old_age_lifespan_matches_across_dt() -> None:
+    cap = float(COLONY_MAX_LIFESPAN_AGE_S)
+    fine_dt = 1.0
+    coarse_dt = 10.0
+    fine_age, fine_cause, fine_steps = _age_until_old_age(fine_dt)
+    coarse_age, coarse_cause, coarse_steps = _age_until_old_age(coarse_dt)
+
+    assert fine_cause == coarse_cause == "old_age"
+    assert cap <= fine_age < cap + fine_dt + 1e-6
+    assert cap <= coarse_age < cap + coarse_dt + 1e-6
+    assert abs(fine_age - coarse_age) <= coarse_dt + 1e-6
+    assert fine_steps != coarse_steps
+    assert fine_steps < COLONY_MAX_LIFESPAN_STEPS
+    assert coarse_steps < COLONY_MAX_LIFESPAN_STEPS
+
+
+def test_runner_old_age_matches_at_nominal_1x_and_10x() -> None:
+    """UI frame at 1x is 1/12 s. A 10x frame is 2.5 s and is split.
+
+    Death is the first substep whose biological age reaches the cap.
+    The two speeds take different decision counts for that same second.
+    """
+
+    def run(frame_dt: float, tag: str) -> tuple[float, int, str]:
+        runner = SimulationRunner(death_journal_path=f"/tmp/colony-lifespan-{tag}.jsonl")
+        agent = ChinchillaAgent(
+            sex="F",
+            rng_seed=11,
+            age=COLONY_MAX_LIFESPAN_AGE_S - 1.0,
+        )
+        agent.energy = 0.9
+        agent.wakefulness.wakefulness = 0.2
+        runner.add_agent(agent)
+        for _ in range(30):
+            if agent.mortality_system.is_dead():
+                break
+            runner.tick(frame_dt)
+        assert agent.mortality_system.is_dead() is True
+        return (
+            float(agent.age),
+            int(agent.lived_steps),
+            str(agent.mortality_system.cause_of_death),
+        )
+
+    age_1x, steps_1x, cause_1x = run(UI_DT_1X, "1x")
+    age_10x, steps_10x, cause_10x = run(UI_DT_10X, "10x")
+    assert cause_1x == cause_10x == "old_age"
+    assert abs(age_1x - COLONY_MAX_LIFESPAN_AGE_S) <= UI_DT_1X + 1e-6
+    assert abs(age_10x - COLONY_MAX_LIFESPAN_AGE_S) <= SimulationRunner.MAX_TICK_DT + 1e-6
+    assert abs(age_1x - age_10x) <= SimulationRunner.MAX_TICK_DT + 1e-6
+    assert steps_1x > steps_10x > 0
+
+
+def _genome_with_lifespan_factor(factor: float) -> GenomeVector:
+    genes = dict(GenomeVector.default().genes)
+    genes["lt_max_lifespan_factor"] = float(factor)
+    return GenomeVector(genes=genes, generation=0, lineage_id="lifespan-factor")
+
+
+def _walk_to_old_age(
+    dt: float,
+    genome: GenomeVector | None,
+) -> tuple[float, str, int, bool]:
+    """Age with ``_age_step`` until old age.
+
+    Returns age, cause, step count, and whether the animal was still alive
+    after passing the unscaled colony cap (13500 s).
+    """
+    agent = ChinchillaAgent(sex="F", rng_seed=1, age=0.0, genome=genome)
+    agent.energy = 0.9
+    agent.wakefulness.wakefulness = 0.2
+    agent.neuromodulators.cortisol = 0.05
+    agent.lived_steps = 3
+    cap = float(agent.mortality_system.max_lifespan_age_s)
+    alive_past_default_cap = False
+    limit = int(cap / dt) + 5
+    steps = 0
+    while not agent.mortality_system.is_dead() and steps < limit:
+        agent._age_step(dt)
+        steps += 1
+        if (
+            not agent.mortality_system.is_dead()
+            and float(agent.age) >= float(COLONY_MAX_LIFESPAN_AGE_S)
+        ):
+            alive_past_default_cap = True
+    assert agent.mortality_system.is_dead() is True
+    assert agent.lived_steps == 3
+    assert agent.mortality_system.max_lifespan_steps == COLONY_MAX_LIFESPAN_STEPS
+    return (
+        float(agent.age),
+        str(agent.mortality_system.cause_of_death),
+        steps,
+        alive_past_default_cap,
+    )
+
+
+def test_lifespan_factor_scales_old_age_and_matches_across_dt() -> None:
+    """Gene ``lt_max_lifespan_factor`` is a plain multiplier on the age cap.
+
+    0.5 dies at 6750 s, 2.0 is still alive at 13500 s and dies at 27000 s,
+    and 1.0 or no genome keeps 13500 s. The same sim-age is reached in a
+    different number of steps at dt 1 s and dt 10 s.
+    """
+    default_cap = float(COLONY_MAX_LIFESPAN_AGE_S)
+    cases: tuple[tuple[GenomeVector | None, float, bool], ...] = (
+        (None, default_cap, False),
+        (_genome_with_lifespan_factor(1.0), default_cap, False),
+        (_genome_with_lifespan_factor(0.5), default_cap * 0.5, False),
+        (_genome_with_lifespan_factor(2.0), default_cap * 2.0, True),
+    )
+    fine_dt = 1.0
+    coarse_dt = 10.0
+    for genome, cap, survives_default in cases:
+        fine_age, fine_cause, fine_steps, fine_alive = _walk_to_old_age(fine_dt, genome)
+        coarse_age, coarse_cause, coarse_steps, coarse_alive = _walk_to_old_age(
+            coarse_dt, genome
+        )
+        assert fine_cause == coarse_cause == "old_age"
+        assert cap <= fine_age < cap + fine_dt + 1e-6
+        assert cap <= coarse_age < cap + coarse_dt + 1e-6
+        assert abs(fine_age - coarse_age) <= coarse_dt + 1e-6
+        assert fine_steps != coarse_steps
+        assert fine_alive is survives_default
+        assert coarse_alive is survives_default
+
+
+def test_lifespan_factor_runner_matches_at_nominal_1x_and_10x() -> None:
+    """UI 1x and 10x kill at the individual's cap, with different decision counts."""
+    default_cap = float(COLONY_MAX_LIFESPAN_AGE_S)
+    cases: tuple[tuple[str, GenomeVector | None, float], ...] = (
+        ("none", None, default_cap),
+        ("one", _genome_with_lifespan_factor(1.0), default_cap),
+        ("half", _genome_with_lifespan_factor(0.5), default_cap * 0.5),
+        ("double", _genome_with_lifespan_factor(2.0), default_cap * 2.0),
+    )
+
+    def run(frame_dt: float, tag: str, genome: GenomeVector | None, cap: float) -> tuple[float, int, str, int]:
+        runner = SimulationRunner(death_journal_path=f"/tmp/colony-lifespan-factor-{tag}.jsonl")
+        agent = ChinchillaAgent(
+            sex="F",
+            rng_seed=11,
+            age=cap - 1.0,
+            genome=genome,
+        )
+        agent.energy = 0.9
+        agent.wakefulness.wakefulness = 0.2
+        assert agent.mortality_system.max_lifespan_age_s == cap
+        assert agent.mortality_system.max_lifespan_steps == COLONY_MAX_LIFESPAN_STEPS
+        runner.add_agent(agent)
+        for _ in range(40):
+            if agent.mortality_system.is_dead():
+                break
+            runner.tick(frame_dt)
+        assert agent.mortality_system.is_dead() is True
+        return (
+            float(agent.age),
+            int(agent.lived_steps),
+            str(agent.mortality_system.cause_of_death),
+            id(agent.mortality_system),
+        )
+
+    systems: list[int] = []
+    for tag, genome, cap in cases:
+        age_1x, steps_1x, cause_1x, system_1x = run(UI_DT_1X, f"{tag}-1x", genome, cap)
+        age_10x, steps_10x, cause_10x, system_10x = run(UI_DT_10X, f"{tag}-10x", genome, cap)
+        assert cause_1x == cause_10x == "old_age"
+        assert abs(age_1x - cap) <= UI_DT_1X + 1e-6
+        assert abs(age_10x - cap) <= SimulationRunner.MAX_TICK_DT + 1e-6
+        assert abs(age_1x - age_10x) <= SimulationRunner.MAX_TICK_DT + 1e-6
+        assert steps_1x > steps_10x > 0
+        systems.extend((system_1x, system_10x))
+    assert len(set(systems)) == len(systems)
+
+
+def test_newborn_lifespan_cap_follows_its_own_genome() -> None:
+    mother = ChinchillaAgent(
+        sex="F",
+        rng_seed=3,
+        genome=_genome_with_lifespan_factor(2.0),
+        name="G0A1SF",
+    )
+    father = ChinchillaAgent(
+        sex="M",
+        rng_seed=4,
+        genome=_genome_with_lifespan_factor(0.5),
+        name="G0A2SM",
+    )
+    mother.colony = [mother, father]
+    father.colony = mother.colony
+    child = mother._create_offspring(father)
+
+    assert child.genome is not None
+    child_factor = float(child.genome.genes["lt_max_lifespan_factor"])
+    minds = (mother, father, child)
+    assert len({id(agent.mortality_system) for agent in minds}) == 3
+    assert mother.mortality_system.max_lifespan_age_s == float(COLONY_MAX_LIFESPAN_AGE_S) * 2.0
+    assert father.mortality_system.max_lifespan_age_s == float(COLONY_MAX_LIFESPAN_AGE_S) * 0.5
+    assert child.mortality_system.max_lifespan_age_s == float(COLONY_MAX_LIFESPAN_AGE_S) * child_factor
+    assert child.mortality_system.max_lifespan_steps == COLONY_MAX_LIFESPAN_STEPS
+
+
+def test_scripted_old_age_uses_each_agents_cap() -> None:
+    """Media deaths use the individual's cap, so a factor above 1.0 still dies.
+
+    The evolution script used to pass the unscaled 13500 s. That is below a
+    doubled cap, so the call registered no death. Promo founders have no
+    genome; the same helper keeps their cap at 13500 s.
+    """
+    default_cap = float(COLONY_MAX_LIFESPAN_AGE_S)
+    saved_random = random.getstate()
+    saved_name_index = ChinchillaAgent._name_index
+    saved_name_counters = dict(ChinchillaAgent._generation_name_counters)
+    try:
+        _assert_scripted_old_age_kills(default_cap)
+    finally:
+        random.setstate(saved_random)
+        ChinchillaAgent._name_index = saved_name_index
+        ChinchillaAgent._generation_name_counters.clear()
+        ChinchillaAgent._generation_name_counters.update(saved_name_counters)
+
+
+def _assert_scripted_old_age_kills(default_cap: float) -> None:
+    import sys
+    from pathlib import Path
+
+    long_lived = ChinchillaAgent(
+        sex="F",
+        age=250.0,
+        genome=_genome_with_lifespan_factor(2.0),
+        rng_seed=1,
+    )
+    short_lived = ChinchillaAgent(
+        sex="M",
+        age=250.0,
+        genome=_genome_with_lifespan_factor(0.5),
+        rng_seed=2,
+    )
+    plain = ChinchillaAgent(sex="F", age=250.0, rng_seed=3)
+    for agent in (long_lived, short_lived, plain):
+        agent.lived_steps = 17
+        agent.energy = 0.8
+
+    assert colony_scripted_old_age_s(long_lived) == default_cap * 2.0
+    assert colony_scripted_old_age_s(short_lived) == default_cap * 0.5
+    assert colony_scripted_old_age_s(plain) == default_cap
+    assert default_cap < float(long_lived.mortality_system.max_lifespan_age_s)
+
+    tools = Path(__file__).resolve().parents[3] / "tools"
+    saved_path = list(sys.path)
+    sys.path.insert(0, str(tools))
+    try:
+        import render_evolution_media
+    finally:
+        sys.path[:] = saved_path
+
+    runner = SimulationRunner(death_journal_path="/tmp/colony-scripted-old-age.jsonl")
+    for agent in (long_lived, short_lived, plain):
+        runner.add_agent(agent)
+    render_evolution_media._kill_oldest(runner, [long_lived, short_lived, plain])
+
+    assert runner.agents == []
+    memorials = runner.death_registry.get_all_memorials()
+    assert len(memorials) == 3
+    assert {memorial.cause_of_death for memorial in memorials} == {"old_age"}
+    for agent in (long_lived, short_lived, plain):
+        assert agent.age == 250.0
+        assert agent.lived_steps == 17
+        assert agent.mortality_system.cause_of_death == "old_age"

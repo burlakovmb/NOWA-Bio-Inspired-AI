@@ -142,18 +142,69 @@ class MortalitySystem:
             self.senescence_rate = 0.0
             self.vitality = _clamp(self.vitality, 0.0, 1.0)
 
+        cause = self._lethal_cause(
+            energy_v=energy_v,
+            wake_v=wake_v,
+            age_steps=age_steps,
+            age_metric=age_metric,
+        )
+        if cause:
+            return self._register_death(cause, age_steps)
+        return False
+
+    def apply_if_already_lethal(
+        self,
+        energy: float,
+        wakefulness: float,
+        lived_steps: int,
+        biological_age_s: float | None = None,
+    ) -> bool:
+        """Record death when ``update`` raised before it could do so.
+
+        Senescence does not advance here. A bookkeeping error must not
+        erase exhaustion, sleep debt, old age, or vitality that is already
+        zero — those still kill.
+        """
+        if self.is_dead():
+            return True
+        age_steps = max(0, _safe_int(lived_steps, 0))
+        energy_v = _clamp(_safe_float(energy, 0.0), 0.0, 1.0)
+        wake_v = _clamp(_safe_float(wakefulness, 0.0), 0.0, 1.0)
+        age_metric = (
+            max(0.0, _safe_float(biological_age_s, 0.0))
+            if biological_age_s is not None
+            else None
+        )
+        cause = self._lethal_cause(
+            energy_v=energy_v,
+            wake_v=wake_v,
+            age_steps=age_steps,
+            age_metric=age_metric,
+        )
+        if cause:
+            return self._register_death(cause, age_steps)
+        return False
+
+    def _lethal_cause(
+        self,
+        *,
+        energy_v: float,
+        wake_v: float,
+        age_steps: int,
+        age_metric: float | None,
+    ) -> str:
         if energy_v <= self.critical_energy_threshold:
-            return self._register_death("exhaustion", age_steps)
+            return "exhaustion"
         if wake_v >= self.critical_wakefulness_threshold:
-            return self._register_death("sleep_deprivation", age_steps)
+            return "sleep_deprivation"
         if self.max_lifespan_age_s is None:
             if age_steps >= self.max_lifespan_steps:
-                return self._register_death("old_age", age_steps)
+                return "old_age"
         elif age_metric is not None and age_metric >= self.max_lifespan_age_s:
-            return self._register_death("old_age", age_steps)
+            return "old_age"
         if self.vitality <= 0.0:
-            return self._register_death("senescence", age_steps)
-        return False
+            return "senescence"
+        return ""
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a snapshot of current mortality subsystem state."""

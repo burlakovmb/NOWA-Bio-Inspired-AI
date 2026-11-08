@@ -47,8 +47,10 @@ Value Layer:
 ### 3.1 Функция ценности
 
 ```text
-V(s) ∈ [-1, 1]
+|V(s)| ≤ 1 / (1 − γ)   при |r| ≤ 1; дефолт γ = 0.95 → 20
 ```
+
+(`δ_t` по-прежнему в `[-1, 1]`; см. [issue-18-minor-learning-fixes.ru.md](specs/issue-18-minor-learning-fixes.ru.md).)
 
 Реализация допускает:
 - табличную модель (state_hash → value) или

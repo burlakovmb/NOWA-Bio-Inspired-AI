@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import random
 import re
@@ -42,6 +43,7 @@ from agent_knowledge import (
     PublicState,
 )
 from config_colony import (
+    COLONY_MAX_LIFESPAN_AGE_S,
     COLONY_MAX_LIFESPAN_STEPS,
     GESTATION_S,
     JUVENILE_BLOCKED_OFFERS,
@@ -111,6 +113,8 @@ MOUNT_DISPLAY_MIN_DRIVE_SCORE = 0.20
 RESOURCE_MISSING_ENERGY_PENALTY_PER_S = 0.02
 WATER_MISSING_ENERGY_PENALTY_PER_S = 0.015
 
+logger = logging.getLogger(__name__)
+
 
 def colony_expected_wake_interval_s() -> float:
     """Mean simulation seconds awake between one sleep bout and the next.
@@ -141,6 +145,70 @@ def _host_dt(dt: float) -> float:
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def _coerce_finite(value: object, default: float = 0.0) -> float:
+    try:
+        casted = float(value)  # host state is untyped
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(casted):
+        return default
+    return casted
+
+
+def _copy_genome(genome: GenomeVector | None) -> GenomeVector | None:
+    """Independent copy of a genome frozen at one moment."""
+    if genome is None:
+        return None
+    genes = getattr(genome, "genes", None)
+    if not isinstance(genes, dict) or not genes:
+        return None
+    try:
+        return GenomeVector(
+            genes={str(key): float(value) for key, value in genes.items()},
+            generation=max(0, int(getattr(genome, "generation", 0) or 0)),
+            lineage_id=str(getattr(genome, "lineage_id", "") or ""),
+        )
+    except (TypeError, ValueError) as exc:
+        logger.warning("failed to snapshot genome: %s", exc)
+        return None
+
+
+def _father_genome_for_birth(mother: object, father: object | None) -> GenomeVector | None:
+    """Alleles stored at conception, otherwise the living father's genome."""
+    snapshot = getattr(mother, "_conception_father_genome", None)
+    if snapshot is not None:
+        return snapshot
+    if father is None:
+        return None
+    return getattr(father, "genome", None)
+
+
+def _colony_max_lifespan_age_s(genome: GenomeVector | None) -> float:
+    """Old-age cap in sim-seconds. A missing genome keeps the colony default.
+
+    ``lt_max_lifespan_factor`` is a plain multiplier (registry range 0.5..2.0).
+    """
+    factor = 1.0
+    if genome is not None:
+        factor = float(
+            (getattr(genome, "genes", {}) or {}).get("lt_max_lifespan_factor", 1.0)
+        )
+    return float(COLONY_MAX_LIFESPAN_AGE_S) * factor
+
+
+def colony_scripted_old_age_s(agent: object) -> float:
+    """Simulated age that meets this animal's own old-age cap.
+
+    Media scripts pass the result as ``biological_age_s``. They do not
+    write it back onto ``agent.age``.
+    """
+    system = getattr(agent, "mortality_system", None)
+    cap = getattr(system, "max_lifespan_age_s", None)
+    if cap is None:
+        cap = _colony_max_lifespan_age_s(getattr(agent, "genome", None))
+    return max(float(getattr(agent, "age", 0.0)), float(cap))
 
 
 class ChinchillaAgent(Agent):
@@ -266,9 +334,14 @@ class ChinchillaAgent(Agent):
         self.pending_offspring_list: list[ChinchillaAgent] = []
         self.own_offspring: list[str] = []
         self._current_mate_id: str | None = None
+        self._conception_father_genome: GenomeVector | None = None
+        self._conception_father_id: str | None = None
+        self._conception_father_name: str = ""
+        self._conception_father_generation: int = 0
 
         self.mortality_system: MortalitySystem = MortalitySystem(
             max_lifespan_steps=COLONY_MAX_LIFESPAN_STEPS,
+            max_lifespan_age_s=_colony_max_lifespan_age_s(self.genome),
             senescence_start_fraction=0.75,
             senescence_vitality_loss_rate=0.00018,
             critical_energy_threshold=0.08,
@@ -1818,36 +1891,169 @@ class ChinchillaAgent(Agent):
         for known in self.knowledge.values():
             known.decay(self.sim_time, dt)
 
-        try:
-            self.reproductive_system.update(
-                energy=self.energy,
-                valence=self.valence,
-                cortisol=float(getattr(self.neuromodulators, "cortisol", 0.0)),
-                lived_steps=self.lived_steps,
-                resource_share=self._food_availability(),
-            )
-        except Exception:
-            pass
+        self._apply_reproduction()
+        self._apply_mortality(dt)
 
-        try:
-            is_dead = self.mortality_system.update(
-                energy=self.energy,
-                wakefulness=self.wakefulness.wakefulness,
-                lived_steps=self.lived_steps,
-                cortisol_mean=float(getattr(self.neuromodulators, "cortisol", 0.0)),
-                biological_age_s=self.age,
-                dt_s=dt,
+    def _apply_reproduction(self) -> None:
+        """Advance reproductive drive. A failed update is logged and leaves drive as it was."""
+        reproductive = getattr(self, "reproductive_system", None)
+        update = getattr(reproductive, "update", None)
+        if reproductive is None or not callable(update):
+            logger.warning(
+                "reproductive update skipped for agent %s: reproductive system is missing",
+                getattr(self, "agent_id", ""),
             )
-            if is_dead:
-                self.current_action = "dead"
-                self.is_sleeping = True
-        except Exception:
-            pass
+            return
+        try:
+            energy = _coerce_finite(self.energy)
+            valence = _coerce_finite(self.valence)
+            neuromod = getattr(self, "neuromodulators", None)
+            cortisol = _coerce_finite(getattr(neuromod, "cortisol", 0.0))
+            lived_steps = int(getattr(self, "lived_steps", 0) or 0)
+            resource_share = _coerce_finite(self._food_availability())
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            logger.warning(
+                "reproductive update inputs unreadable for agent %s: %s",
+                getattr(self, "agent_id", ""),
+                exc,
+            )
+            return
+        try:
+            update(
+                energy=energy,
+                valence=valence,
+                cortisol=cortisol,
+                lived_steps=lived_steps,
+                resource_share=resource_share,
+            )
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            logger.warning(
+                "reproductive update failed for agent %s: %s",
+                getattr(self, "agent_id", ""),
+                exc,
+                exc_info=True,
+            )
+
+    def _apply_mortality(self, dt: float) -> None:
+        """Advance mortality. A failed update is logged and does not cancel death."""
+        mortality = getattr(self, "mortality_system", None)
+        update = getattr(mortality, "update", None)
+        if mortality is None or not callable(update):
+            logger.warning(
+                "mortality update skipped for agent %s: mortality system is missing",
+                getattr(self, "agent_id", ""),
+            )
+            return
+        try:
+            energy = _coerce_finite(self.energy)
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            logger.warning(
+                "mortality energy unreadable for agent %s: %s",
+                getattr(self, "agent_id", ""),
+                exc,
+            )
+            energy = _coerce_finite(getattr(self, "_energy_override", 1.0), 1.0)
+        try:
+            wake_obj = getattr(self, "wakefulness", None)
+            wakefulness = _coerce_finite(getattr(wake_obj, "wakefulness", 0.0))
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            logger.warning(
+                "mortality wakefulness unreadable for agent %s: %s",
+                getattr(self, "agent_id", ""),
+                exc,
+            )
+            wakefulness = 0.0
+        try:
+            lived_steps = int(getattr(self, "lived_steps", 0) or 0)
+        except (TypeError, ValueError):
+            lived_steps = 0
+        try:
+            neuromod = getattr(self, "neuromodulators", None)
+            cortisol = _coerce_finite(getattr(neuromod, "cortisol", 0.0))
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            logger.warning(
+                "mortality cortisol unreadable for agent %s: %s",
+                getattr(self, "agent_id", ""),
+                exc,
+            )
+            cortisol = 0.0
+        age_s = _coerce_finite(getattr(self, "age", 0.0))
+        dt_s = _coerce_finite(dt)
+        if dt_s < 0.0:
+            dt_s = 0.0
+        is_dead = False
+        try:
+            is_dead = bool(
+                update(
+                    energy=energy,
+                    wakefulness=wakefulness,
+                    lived_steps=lived_steps,
+                    cortisol_mean=cortisol,
+                    biological_age_s=age_s,
+                    dt_s=dt_s,
+                )
+            )
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            logger.warning(
+                "mortality update failed for agent %s; death check continues: %s",
+                getattr(self, "agent_id", ""),
+                exc,
+                exc_info=True,
+            )
+            fallback = getattr(mortality, "apply_if_already_lethal", None)
+            if callable(fallback):
+                try:
+                    is_dead = bool(
+                        fallback(
+                            energy=energy,
+                            wakefulness=wakefulness,
+                            lived_steps=lived_steps,
+                            biological_age_s=age_s,
+                        )
+                    )
+                except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as follow_exc:
+                    logger.warning(
+                        "mortality lethal fallback failed for agent %s: %s",
+                        getattr(self, "agent_id", ""),
+                        follow_exc,
+                        exc_info=True,
+                    )
+        if not is_dead:
+            is_dead_fn = getattr(mortality, "is_dead", None)
+            if callable(is_dead_fn):
+                try:
+                    is_dead = bool(is_dead_fn())
+                except (TypeError, ValueError, AttributeError, RuntimeError):
+                    is_dead = False
+        if is_dead:
+            self.current_action = "dead"
+            self.is_sleeping = True
+
+    def _capture_conception_genome(self, male_id: str) -> None:
+        """Keep the father's genome from the moment of conception."""
+        father_id = str(male_id or "").strip() or None
+        father = self._find_agent_by_id(father_id)
+        self._conception_father_id = father_id
+        self._conception_father_name = str(getattr(father, "name", "") or "") if father is not None else ""
+        try:
+            raw_generation = getattr(father, "generation", 0) if father is not None else 0
+            self._conception_father_generation = int(raw_generation or 0)
+        except (TypeError, ValueError):
+            self._conception_father_generation = 0
+        genome = getattr(father, "genome", None) if father is not None else None
+        self._conception_father_genome = _copy_genome(genome)
+
+    def _clear_conception_record(self) -> None:
+        self._conception_father_genome = None
+        self._conception_father_id = None
+        self._conception_father_name = ""
+        self._conception_father_generation = 0
 
     def _start_pregnancy(self, male_id: str) -> None:
         self.is_pregnant = True
         self.gestation_timer = GESTATION_S
         self._current_mate_id = male_id
+        self._capture_conception_genome(male_id)
         known = self.knowledge.get(male_id)
         if known is not None:
             known.is_mate = True
@@ -1867,6 +2073,7 @@ class ChinchillaAgent(Agent):
         self.is_pregnant = False
         self.gestation_timer = 0.0
         self._current_mate_id = None
+        self._clear_conception_record()
         self._apply_affect_impulse(valence=0.5, attachment=0.8, intensity=0.7)
         try:
             self.reproductive_system.register_reproduction(self.lived_steps)
@@ -1890,9 +2097,13 @@ class ChinchillaAgent(Agent):
             mother_gen = int(getattr(self, "generation", 0) or 0)
         except Exception:
             mother_gen = 0
+        if father is not None:
+            raw_father_gen = getattr(father, "generation", 0)
+        else:
+            raw_father_gen = getattr(self, "_conception_father_generation", 0)
         try:
-            father_gen = int(getattr(father, "generation", 0) or 0) if father is not None else 0
-        except Exception:
+            father_gen = int(raw_father_gen or 0)
+        except (TypeError, ValueError):
             father_gen = 0
         child_generation = max(mother_gen, father_gen) + 1
 
@@ -2005,20 +2216,30 @@ class ChinchillaAgent(Agent):
             rng=self._rng,
         )
 
-        if mother.genome is not None and father is not None and father.genome is not None:
+        paternal_genome = _father_genome_for_birth(mother, father)
+        if mother.genome is not None and paternal_genome is not None:
             try:
                 child_genome, _ = mother.genome.crossover(
-                    father.genome,
+                    paternal_genome,
                     alpha=0.5,
                     mode="arithmetic",
                     rng=self._rng,
                 )
                 child_genome = child_genome.mutate(rate=0.05, rng=self._rng)
                 self.genome = child_genome
+                self.mortality_system.max_lifespan_age_s = _colony_max_lifespan_age_s(self.genome)
                 mother_id = str(getattr(mother, "agent_id", "") or "")
-                father_id = str(getattr(father, "agent_id", "") or "")
+                father_id = str(
+                    getattr(father, "agent_id", "")
+                    or getattr(mother, "_conception_father_id", "")
+                    or ""
+                )
                 mother_name = str(getattr(mother, "name", "") or mother_id)
-                father_name = str(getattr(father, "name", "") or father_id)
+                father_name = str(
+                    getattr(father, "name", "")
+                    or getattr(mother, "_conception_father_name", "")
+                    or father_id
+                )
                 eps = 1e-9
                 midpoint_abs_shift_sum = 0.0
                 mother_weight_sum = 0.0
@@ -2027,7 +2248,7 @@ class ChinchillaAgent(Agent):
                 per_gene_shift: list[tuple[str, float]] = []
                 for key, child_val in (getattr(child_genome, "genes", {}) or {}).items():
                     m_val = float((getattr(mother.genome, "genes", {}) or {}).get(key, child_val))
-                    f_val = float((getattr(father.genome, "genes", {}) or {}).get(key, child_val))
+                    f_val = float((getattr(paternal_genome, "genes", {}) or {}).get(key, child_val))
                     c_val = float(child_val)
                     midpoint = (m_val + f_val) / 2.0
                     shift = c_val - midpoint
@@ -2043,7 +2264,7 @@ class ChinchillaAgent(Agent):
                     reconstructed_genes += 1
                 top_shifted = sorted(per_gene_shift, key=lambda item: abs(float(item[1])), reverse=True)[:8]
                 mother_distance = float(child_genome.distance(mother.genome))
-                father_distance = float(child_genome.distance(father.genome))
+                father_distance = float(child_genome.distance(paternal_genome))
                 self.genome_inheritance_meta = {
                     "mode": "recombined",
                     "mother_id": mother_id,
@@ -2083,8 +2304,22 @@ class ChinchillaAgent(Agent):
                     )._apply_genome_to_agent(
                         self, params
                     )
-            except Exception:
-                pass
+            except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+                logger.warning(
+                    "genome recombination failed for offspring of %s: %s",
+                    getattr(mother, "agent_id", ""),
+                    exc,
+                    exc_info=True,
+                )
+        else:
+            logger.warning(
+                "offspring of %s born without a recombined genome "
+                "(mother_genome=%s, father_genome=%s, father_id=%s)",
+                getattr(mother, "agent_id", ""),
+                getattr(mother, "genome", None) is not None,
+                paternal_genome is not None,
+                getattr(father, "agent_id", None) or getattr(mother, "_conception_father_id", None),
+            )
 
     def _inherit_from(self, mother: "ChinchillaAgent", father: "ChinchillaAgent" | None) -> None:
         """Backward-compatible alias for older colony code."""

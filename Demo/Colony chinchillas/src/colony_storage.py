@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agent_knowledge import HearsayItem, InteractionEpisode, KnownAgent
-from colony_agent import ChinchillaAgent
+from colony_agent import ChinchillaAgent, _colony_max_lifespan_age_s
+from genome import GenomeVector
 from heat_cycle import HeatCycle
 from learning_guard import initializing
 from shared_resources import SharedResources
@@ -225,6 +226,7 @@ class ColonyStorage:
                 "boredom": _f(agent.boredom),
                 "attachment": _f(agent.attachment_level),
             },
+            "genome": self._serialize_genome(getattr(agent, "genome", None)),
             "reproduction": {
                 "is_mature": bool(agent.is_mature),
                 "is_pregnant": bool(agent.is_pregnant),
@@ -232,6 +234,12 @@ class ColonyStorage:
                 "current_mate_id": agent._current_mate_id,
                 "own_offspring": list(agent.own_offspring),
                 "heat_cycle": self._serialize_heat_cycle(agent.heat_cycle),
+                "conception_father_id": getattr(agent, "_conception_father_id", None),
+                "conception_father_name": str(getattr(agent, "_conception_father_name", "") or ""),
+                "conception_father_generation": _i(getattr(agent, "_conception_father_generation", 0)),
+                "conception_father_genome": self._serialize_genome(
+                    getattr(agent, "_conception_father_genome", None)
+                ),
                 "pending_offspring_list": [
                     self._serialize_agent(child) for child in agent.pending_offspring_list
                 ],
@@ -320,6 +328,20 @@ class ColonyStorage:
         agent.gestation_timer = _f(reproduction.get("gestation_timer", 0.0), 0.0)
         agent._current_mate_id = reproduction.get("current_mate_id")
         agent.own_offspring = list(reproduction.get("own_offspring", []) or [])
+        # Absent on saves written before genomes were stored. None keeps the
+        # constructor default: no genome, colony lifespan cap.
+        agent.genome = self._deserialize_genome(payload.get("genome"))
+        agent.mortality_system.max_lifespan_age_s = _colony_max_lifespan_age_s(agent.genome)
+        agent._conception_father_genome = self._deserialize_genome(
+            reproduction.get("conception_father_genome")
+        )
+        raw_father_id = reproduction.get("conception_father_id")
+        if raw_father_id is None:
+            agent._conception_father_id = None
+        else:
+            agent._conception_father_id = str(raw_father_id).strip() or None
+        agent._conception_father_name = str(reproduction.get("conception_father_name") or "")
+        agent._conception_father_generation = _i(reproduction.get("conception_father_generation"), 0)
         agent.heat_cycle = self._deserialize_heat_cycle(reproduction.get("heat_cycle"), agent.sex)
         agent.pending_offspring_list = [
             self._deserialize_agent(child_payload, resources)
@@ -331,6 +353,28 @@ class ColonyStorage:
             str(key): self._deserialize_known(dict(item))
             for key, item in knowledge_payload.items()
         }
+
+    def _serialize_genome(self, genome: GenomeVector | None) -> dict[str, Any] | None:
+        if genome is None:
+            return None
+        to_dict = getattr(genome, "to_dict", None)
+        if not callable(to_dict):
+            return None
+        try:
+            payload = to_dict()
+        except (TypeError, ValueError, AttributeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    def _deserialize_genome(self, payload: Any) -> GenomeVector | None:
+        if not isinstance(payload, dict):
+            return None
+        try:
+            return GenomeVector.from_dict(payload)
+        except (TypeError, ValueError, AttributeError):
+            return None
 
     def _serialize_pending_offer(self, pending: PendingOffer | None) -> dict[str, Any] | None:
         if pending is None:

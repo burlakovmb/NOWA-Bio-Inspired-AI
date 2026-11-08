@@ -8,6 +8,7 @@ autonomous sleep/wake dynamics for agents.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import math
 import random
 import warnings
@@ -24,6 +25,7 @@ from reproduction import (
 
 
 SWARM_VERSION = "2.2"
+_LOG = logging.getLogger(__name__)
 MAX_POPULATION_SIZE = 256
 MIN_POPULATION_SIZE = 2
 MIN_AGENT_DISTANCE = 0.1
@@ -502,18 +504,20 @@ class SwarmEnvironment:
             )
             return self._slots[agent_id].position
 
+        # Cap first, then one publication. A placement failure raises
+        # before the slot exists, so the caller cannot observe a partial add.
         if len(self._slots) >= MAX_POPULATION_SIZE:
             raise ValueError(f"Population limit reached ({MAX_POPULATION_SIZE})")
 
         target = position if position is not None else Position3D.random(self.config.bounds, self._rng)
         assigned = self._find_free_position(target)
+        perception_radius = self._get_perception_radius(agent)
 
-        slot = AgentSlot(
+        self._slots[agent_id] = AgentSlot(
             agent=agent,
             position=assigned,
-            perception_radius=self._get_perception_radius(agent),
+            perception_radius=perception_radius,
         )
-        self._slots[agent_id] = slot
 
         setter = getattr(agent, "set_environment_interface", None)
         if callable(setter):
@@ -720,26 +724,51 @@ class SwarmEnvironment:
         except Exception:
             pass
 
+        mortality = self._get_agent_component(agent, "mortality_system")
+        if mortality is None or not hasattr(mortality, "update"):
+            return
+        history = getattr(agent, "cortisol_history", None)
+        if isinstance(history, list) and history:
+            cortisol_values = [_clamp(_safe_float(item, cortisol), 0.0, 1.0) for item in history]
+            cortisol_mean = sum(cortisol_values) / float(len(cortisol_values))
+        else:
+            cortisol_mean = _clamp(cortisol, 0.0, 1.0)
+        energy_v = _clamp(energy, 0.0, 1.0)
+        wake_v = self._get_wakefulness_value(agent)
+        age_s = getattr(agent, "age", None)
         try:
-            mortality = self._get_agent_component(agent, "mortality_system")
-            if mortality is None or not hasattr(mortality, "update"):
-                return
-            history = getattr(agent, "cortisol_history", None)
-            if isinstance(history, list) and history:
-                cortisol_values = [_clamp(_safe_float(item, cortisol), 0.0, 1.0) for item in history]
-                cortisol_mean = sum(cortisol_values) / float(len(cortisol_values))
-            else:
-                cortisol_mean = _clamp(cortisol, 0.0, 1.0)
             mortality.update(
-                energy=_clamp(energy, 0.0, 1.0),
-                wakefulness=self._get_wakefulness_value(agent),
+                energy=energy_v,
+                wakefulness=wake_v,
                 lived_steps=lived_steps,
                 cortisol_mean=cortisol_mean,
-                biological_age_s=getattr(agent, "age", None),
+                biological_age_s=age_s,
                 dt_s=1.0,
             )
-        except Exception:
-            pass
+        except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+            _LOG.warning(
+                "mortality update failed for agent %s; death check continues: %s",
+                self._agent_id(agent),
+                exc,
+                exc_info=True,
+            )
+            fallback = getattr(mortality, "apply_if_already_lethal", None)
+            if not callable(fallback):
+                return
+            try:
+                fallback(
+                    energy=energy_v,
+                    wakefulness=wake_v,
+                    lived_steps=lived_steps,
+                    biological_age_s=age_s if isinstance(age_s, (int, float)) else None,
+                )
+            except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as follow_exc:
+                _LOG.warning(
+                    "mortality lethal fallback failed for agent %s: %s",
+                    self._agent_id(agent),
+                    follow_exc,
+                    exc_info=True,
+                )
 
     def _check_mortality(self, agent: Any) -> bool:
         """Remove dead agents and update death counters."""
@@ -1067,8 +1096,13 @@ class SwarmEnvironment:
             agent = slot.agent
             try:
                 self._update_agent_vitality(agent, self._last_resource_share)
-            except Exception:
-                pass
+            except (TypeError, ValueError, AttributeError, ArithmeticError, RuntimeError) as exc:
+                _LOG.warning(
+                    "vitality update failed for agent %s: %s",
+                    agent_id,
+                    exc,
+                    exc_info=True,
+                )
             self._check_mortality(agent)
 
         self._check_reproduction_pairs()

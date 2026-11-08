@@ -49,6 +49,22 @@ def _channel_rows(snap):
     return [(row["action"], row["go"], row["nogo"]) for row in snap["channels"]]
 
 
+def _assert_q_rows_close(left, right, *, abs: float = 1e-12) -> None:
+    assert len(left) == len(right)
+    for left_row, right_row in zip(left, right):
+        assert left_row[0] == right_row[0]
+        assert left_row[1] == right_row[1]
+        assert left_row[2] == pytest.approx(right_row[2], abs=abs, rel=0)
+
+
+def _assert_channel_rows_close(left, right, *, abs: float = 1e-12) -> None:
+    assert len(left) == len(right)
+    for left_row, right_row in zip(left, right):
+        assert left_row[0] == right_row[0]
+        assert left_row[1] == pytest.approx(right_row[1], abs=abs, rel=0)
+        assert left_row[2] == pytest.approx(right_row[2], abs=abs, rel=0)
+
+
 def test_fingerprint_holds_across_a_waking_day():
     """Rewards, override, revised feedback, queued external feedback."""
     agent = _agent(seed=1)
@@ -221,9 +237,7 @@ def test_feedback_idempotency_replacement_and_unknown_id():
 
     once = _run((2,))
     repeated = _run((2, 2, 2))
-    assert _q_rows(labile_snapshot(once)) == pytest.approx(
-        _q_rows(labile_snapshot(repeated)), abs=1e-12, rel=0
-    )
+    _assert_q_rows_close(_q_rows(labile_snapshot(once)), _q_rows(labile_snapshot(repeated)))
     assert len(labile_snapshot(repeated)["contributions"]) == 1
     snap_before = labile_snapshot(repeated)
     again = repeated.apply_feedback_to_last_experience(
@@ -244,11 +258,13 @@ def test_feedback_idempotency_replacement_and_unknown_id():
         action_id="go",
         episode_id=direct.last_episode_id,
     )
-    assert _q_rows(labile_snapshot(replaced)) == pytest.approx(
-        _q_rows(labile_snapshot(direct)), abs=1e-12, rel=0
+    _assert_q_rows_close(
+        _q_rows(labile_snapshot(replaced)),
+        _q_rows(labile_snapshot(direct)),
     )
-    assert _channel_rows(labile_snapshot(replaced)) == pytest.approx(
-        _channel_rows(labile_snapshot(direct)), abs=1e-12, rel=0
+    _assert_channel_rows_close(
+        _channel_rows(labile_snapshot(replaced)),
+        _channel_rows(labile_snapshot(direct)),
     )
 
     frozen = labile_snapshot(replaced)
@@ -290,8 +306,9 @@ def test_save_load_legacy_empty_and_decay_continues(tmp_path):
     assert restored._host_clock_s == pytest.approx(agent._host_clock_s)
     agent.advance_time(30.0)
     restored.advance_time(30.0)
-    assert _q_rows(labile_snapshot(restored)) == pytest.approx(
-        _q_rows(labile_snapshot(agent)), abs=1e-12, rel=0
+    _assert_q_rows_close(
+        _q_rows(labile_snapshot(restored)),
+        _q_rows(labile_snapshot(agent)),
     )
     assert labile_snapshot(restored)["q"][0]["value"] < before["q"][0]["value"]
 

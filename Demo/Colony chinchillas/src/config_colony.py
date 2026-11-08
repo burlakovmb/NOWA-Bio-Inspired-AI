@@ -11,7 +11,16 @@ ESTRUS_DURATION_S: Final[float] = 180.0
 # More frequent refill keeps medium/large colonies sustainable.
 REFILL_DAY_S: Final[float] = 600.0
 OFFER_TIMEOUT_S: Final[float] = 10.0
-# Lifespan is controlled by mortality dynamics and step-based compatibility limit.
+# Old age is biological age in sim-seconds. A decision-step budget made
+# lifespan follow dt and UI speed. Captive chinchillas mature at about
+# 8 months and live about 10 years on average, a x15 ratio. The demo
+# already maps maturity to MATURITY_AGE_S, so the cap is 15 * 900 = 13500 s.
+# 13500 / GESTATION_S = 45 gestations, inside the real 10-15 year span
+# (about 33-49 gestations of 111 days). The heat-cycle clock is a poorer
+# anchor (the demo cycle is long relative to a real ~38-day cycle).
+COLONY_MAX_LIFESPAN_AGE_S: Final[float] = 15.0 * MATURITY_AGE_S
+# Kept as MortalitySystem.max_lifespan_steps for snapshots and the
+# health-index normalizer. Ignored for death while max_lifespan_age_s is set.
 COLONY_MAX_LIFESPAN_STEPS: Final[int] = 20000
 # Global resource drain multiplier for colony balancing in dense populations.
 RESOURCE_CONSUMPTION_MULTIPLIER: Final[float] = 2.0

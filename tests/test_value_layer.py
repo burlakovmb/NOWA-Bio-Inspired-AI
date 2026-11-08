@@ -8,7 +8,14 @@ def _allow_stable_writers_under_test():
     with learning_allowed():
         yield
 
-from value_layer import StateEncoder, ValueLayer, _cosine_similarity, _hash_text_vector, state_similarity
+from value_layer import (
+    StateEncoder,
+    ValueLayer,
+    _cosine_similarity,
+    _hash_text_vector,
+    effective_alpha_sleep,
+    state_similarity,
+)
 
 
 def _state(
@@ -209,7 +216,7 @@ def test_online_td_clip_limits_reward_spike():
     assert abs(out["td_error"] - 0.2) < 1e-9
 
 
-def test_sleep_default_alpha_is_stronger_than_online_default():
+def test_sleep_alpha_stays_within_online_ratio():
     layer = ValueLayer(alpha_online_default=0.01, alpha_sleep_default=0.08, max_update_l2=1.0)
     st = _state("s0")
     st_next = _state("s1")
@@ -236,4 +243,11 @@ def test_sleep_default_alpha_is_stronger_than_online_default():
         mode="sleep",
     )
 
-    assert abs(sleep["value"]) > abs(online["value"])
+    # Spec: alpha_sleep ≤ 0.25 * alpha_online. The old 0.08 request is capped at use.
+    assert effective_alpha_sleep(
+        layer.alpha_online_default,
+        layer.alpha_sleep_default,
+        layer.alpha_sleep_ratio,
+    ) == pytest.approx(0.25 * layer.alpha_online_default)
+    assert float(sleep["alpha_effective"]) <= 0.25 * layer.alpha_online_default + 1e-12
+    assert abs(sleep["value"]) < abs(online["value"])

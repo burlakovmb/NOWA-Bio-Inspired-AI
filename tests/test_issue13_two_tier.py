@@ -43,6 +43,34 @@ def _build_agent(actions, seed=0, capacity=80, wake_s=1000.0):
     return agent
 
 
+def _assert_labile_q_rows_close(rows_left, rows_right, *, abs: float = 1e-12) -> None:
+    assert len(rows_left) == len(rows_right)
+    for row_left, row_right in zip(rows_left, rows_right):
+        assert row_left["state_key"] == row_right["state_key"]
+        assert row_left["action"] == row_right["action"]
+        assert row_left["value"] == pytest.approx(row_right["value"], abs=abs, rel=0)
+        assert row_left["updated_at"] == pytest.approx(row_right["updated_at"], abs=abs, rel=0)
+
+
+def _assert_labile_channels_close(rows_left, rows_right, *, abs: float = 1e-12) -> None:
+    assert len(rows_left) == len(rows_right)
+    for row_left, row_right in zip(rows_left, rows_right):
+        assert row_left["action"] == row_right["action"]
+        assert row_left["go"] == pytest.approx(row_right["go"], abs=abs, rel=0)
+        assert row_left["nogo"] == pytest.approx(row_right["nogo"], abs=abs, rel=0)
+        assert row_left["updated_at"] == pytest.approx(row_right["updated_at"], abs=abs, rel=0)
+
+
+def _assert_bg_channel_map_close(left, right, *, abs: float = 1e-9) -> None:
+    assert left.keys() == right.keys()
+    for name in left:
+        left_tuple = left[name]
+        right_tuple = right[name]
+        assert len(left_tuple) == len(right_tuple)
+        for left_value, right_value in zip(left_tuple, right_tuple):
+            assert left_value == pytest.approx(right_value, abs=abs, rel=0)
+
+
 def _positive_strengths(agent):
     traces = getattr(agent.intent_memory, "traces", {}) or {}
     return {
@@ -236,15 +264,16 @@ def test_feedback_is_idempotent_and_a_changed_rating_replaces():
 
     single = _once((2,))
     repeated = _once((2, 2, 2))
-    assert labile_snapshot(single)["q"] == pytest.approx(labile_snapshot(repeated)["q"], abs=1e-12, rel=0)
+    _assert_labile_q_rows_close(labile_snapshot(single)["q"], labile_snapshot(repeated)["q"])
     assert len(labile_snapshot(repeated)["contributions"]) == 1
     assert stable_fingerprint(single) == stable_fingerprint(repeated)
 
     replaced = _once((2, -2))
     direct = _once((-2,))
-    assert labile_snapshot(replaced)["q"] == pytest.approx(labile_snapshot(direct)["q"], abs=1e-12, rel=0)
-    assert labile_snapshot(replaced)["channels"] == pytest.approx(
-        labile_snapshot(direct)["channels"], abs=1e-12, rel=0
+    _assert_labile_q_rows_close(labile_snapshot(replaced)["q"], labile_snapshot(direct)["q"])
+    _assert_labile_channels_close(
+        labile_snapshot(replaced)["channels"],
+        labile_snapshot(direct)["channels"],
     )
     missing = replaced.apply_feedback_to_last_experience(-2, episode_id="missing-episode")
     assert missing["updated"] is False
@@ -278,10 +307,10 @@ def test_save_load_restores_labile_clock_and_config(tmp_path):
     )
     assert restored.plasticity.expected_wake_interval_s == pytest.approx(1000.0)
     assert restored._host_clock_s == pytest.approx(agent._host_clock_s)
-    assert labile_snapshot(restored)["q"] == pytest.approx(labile_snapshot(agent)["q"], abs=1e-12, rel=0)
+    _assert_labile_q_rows_close(labile_snapshot(restored)["q"], labile_snapshot(agent)["q"])
     agent.advance_time(25.0)
     restored.advance_time(25.0)
-    assert labile_snapshot(restored)["q"] == pytest.approx(labile_snapshot(agent)["q"], abs=1e-12, rel=0)
+    _assert_labile_q_rows_close(labile_snapshot(restored)["q"], labile_snapshot(agent)["q"])
 
     legacy = _build_agent(("go",), seed=1)
     legacy.step(["old"], reward=1.0, terminal=True, dt=0.0)
@@ -575,7 +604,7 @@ def test_second_sleep_matches_shy_only_control():
             for name, channel in subject.bg_action_channels.items()
         }
 
-    assert _channels(agent) == pytest.approx(_channels(control), abs=1e-9, rel=0)
+    _assert_bg_channel_map_close(_channels(agent), _channels(control))
     assert _stable_q(agent, ["bin"], "go") == pytest.approx(_stable_q(control, ["bin"], "go"), abs=1e-9)
     left = {key: float(trace.strength) for key, trace in agent.intent_memory.traces.items()}
     right = {key: float(trace.strength) for key, trace in control.intent_memory.traces.items()}
