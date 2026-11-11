@@ -38,6 +38,10 @@ do not call an external LLM from NOWA's runtime.
   mitigation. This fixes a core-storage reference gap without editing core.
 - Sandbox checkpoints must retain learned `IntentMemory` if present and relink
   the manager on load. Older files lacking this extension remain loadable.
+  Extend the agent file through a temporary sibling and atomic replacement.
+  Invalid optional habit data must not abort a successful base restore: keep
+  existing habits and report a warning. This does not make the whole metadata
+  and agent-file pair a transaction or repair a corrupt base checkpoint.
 
 Waking plasticity is bounded, decaying labile activity. Stable learning remains
 inside sleep. The Maintainer's microconsolidation analogy does not authorize

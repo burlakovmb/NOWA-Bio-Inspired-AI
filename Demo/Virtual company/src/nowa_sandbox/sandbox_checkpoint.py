@@ -10,8 +10,11 @@ fresh world by definition (constraint V1).
 
 from __future__ import annotations
 
+import logging
+import os
 import pickle
 import random
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +25,7 @@ from .training_loop import SandboxTrainingResult
 
 
 CHECKPOINT_VERSION = 1
+LOGGER = logging.getLogger(__name__)
 
 
 class CheckpointError(RuntimeError):
@@ -127,7 +131,7 @@ def restore_agent(checkpoint: SandboxCheckpoint, agent: Any) -> bool:
 
 
 def _save_intent_memory_extension(agent: Any, agent_path: Path) -> None:
-    """Persist learned sandbox habits omitted by core AgentStorage."""
+    """Atomically add sandbox habits without truncating the live agent file."""
     intent_memory = getattr(agent, "intent_memory", None)
     to_dict = getattr(intent_memory, "to_dict", None)
     if not callable(to_dict):
@@ -137,25 +141,74 @@ def _save_intent_memory_extension(agent: Any, agent_path: Path) -> None:
     if not isinstance(state, dict):
         return
     state["sandbox_intent_memory"] = to_dict()
-    with agent_path.open("wb") as handle:
-        pickle.dump(state, handle)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=agent_path.parent, prefix=f".{agent_path.name}.",
+            suffix=".tmp", delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            pickle.dump(state, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Close the temporary file before replacement, including on Windows.
+        os.replace(temporary, agent_path)
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                LOGGER.warning("Could not remove a sandbox IntentMemory temporary file")
 
 
 def _load_intent_memory_extension(agent: Any, agent_path: Path) -> None:
-    """Restore sandbox habits when present; old checkpoint files remain valid."""
-    with agent_path.open("rb") as handle:
-        state = pickle.load(handle)
-    if not isinstance(state, dict) or "sandbox_intent_memory" not in state:
-        return
-    ensure_core_src_on_path()
-    from intent_memory import IntentMemory
-    from learning_guard import initializing
+    """Restore optional habits; extension failures must not abort base restore."""
+    try:
+        with agent_path.open("rb") as handle:
+            state = pickle.load(handle)
+        if not isinstance(state, dict):
+            raise ValueError("sandbox checkpoint state must be a mapping")
+        if "sandbox_intent_memory" not in state:
+            return
+        extension = state["sandbox_intent_memory"]
+        if not isinstance(extension, dict):
+            raise ValueError("sandbox IntentMemory extension must be a mapping")
+        traces = extension.get("traces")
+        if traces is not None and not isinstance(traces, (list, dict)):
+            raise ValueError("sandbox intent traces must be a list or mapping")
+        rows = traces.values() if isinstance(traces, dict) else (traces or [])
+        for row in rows:
+            if not isinstance(row, dict) or any(
+                not isinstance(row.get(key), str) or not row[key].strip()
+                for key in ("intent_type", "context_signature")
+            ):
+                # The core skips these rows. Reject the optional extension
+                # instead of silently replacing existing habits with less data.
+                raise ValueError("sandbox intent trace lacks a valid identity")
+        ensure_core_src_on_path()
+        from intent_memory import IntentMemory
+        from learning_guard import initializing
 
-    with initializing():
-        agent.intent_memory = IntentMemory.from_dict(state["sandbox_intent_memory"])
-        manager = getattr(agent, "sleep_manager", None)
-        if manager is not None:
-            manager.intent_memory = agent.intent_memory
+        with initializing():
+            memory = IntentMemory.from_dict(extension)
+            previous = getattr(agent, "intent_memory", None)
+            manager = getattr(agent, "sleep_manager", None)
+            previous_manager = getattr(manager, "intent_memory", None)
+            try:
+                agent.intent_memory = memory
+                if manager is not None:
+                    manager.intent_memory = memory
+            except Exception:
+                agent.intent_memory = previous
+                if manager is not None:
+                    manager.intent_memory = previous_manager
+                raise
+    except Exception as exc:
+        LOGGER.warning(
+            "Sandbox IntentMemory extension could not be restored (%s); "
+            "base memory remains loaded",
+            type(exc).__name__,
+        )
 
 
 # ---------------------------------------------------------------------
