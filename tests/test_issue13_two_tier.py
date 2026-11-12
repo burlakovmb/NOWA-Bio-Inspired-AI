@@ -343,6 +343,183 @@ def test_save_load_restores_labile_clock_and_config(tmp_path):
     assert labile_snapshot(empty)["q"] == []
     assert empty._host_clock_s == pytest.approx(0.0)
 
+def test_load_rebinds_sleep_manager_and_consolidates_restored_labile(tmp_path):
+    """A loaded labile layer is the one sleep consolidates.
+
+    ``load_agent`` replaces ``agent.labile`` and ``agent.plasticity``. The
+    manager must see those objects, including when the caller passes
+    ``sleep_manager`` and when a legacy file has no ``labile_layer``.
+    One undecayed +1 moves Go 0.50 -> 0.58 only if the restored tag is
+    captured; the legacy empty layer leaves the sleep-rate step alone
+    (0.50 -> 0.57).
+    """
+    import pickle
+
+    from storage import AgentStorage
+
+    agent = _build_agent(("go",), seed=1, wake_s=1000.0)
+    agent.sleep_manager.decay_rate_sleep = 0.0
+    episode_id = agent.commit_executed_transition(
+        action="go",
+        reward=1.0,
+        context_events=["bin"],
+        decided_action="go",
+        terminal=True,
+        dt=0.0,
+    )
+    assert agent.labile._contributions
+    assert agent.sleep_manager.labile is agent.labile
+
+    storage = AgentStorage(save_dir=str(tmp_path))
+    path = storage.save_agent(
+        agent.hippocampus,
+        agent.cortex,
+        agent.selector,
+        value_layer=agent.value_layer,
+        sleep_manager=agent.sleep_manager,
+        agent=agent,
+        filename="rebind.pkl",
+    )
+    restored = _build_agent(("go",), seed=9, wake_s=50.0)
+    stale_labile = restored.labile
+    stale_plasticity = restored.plasticity
+    storage.load_agent(
+        restored.hippocampus,
+        restored.cortex,
+        restored.selector,
+        path,
+        value_layer=restored.value_layer,
+        sleep_manager=restored.sleep_manager,
+        agent=restored,
+    )
+    assert restored.labile is not stale_labile
+    assert restored.plasticity is not stale_plasticity
+    assert restored.sleep_manager.labile is restored.labile
+    assert restored.sleep_manager.plasticity is restored.plasticity
+    assert restored.labile.config is restored.plasticity
+    assert restored.sleep_manager._host_agent is restored
+    assert restored.plasticity.expected_wake_interval_s == pytest.approx(1000.0)
+    assert restored.labile._contributions
+    assert episode_id in restored.labile._contributions
+
+    stats = restored.sleep(cycles=1)
+    assert not stats.get("error")
+    assert restored.bg_action_channels["go"].go_weight == pytest.approx(0.58, abs=1e-9)
+    assert restored.labile._contributions == {}
+    assert restored.hippocampus.get_experience(episode_id).consolidated is True
+    assert restored.sleep_manager.labile is restored.labile
+    assert restored.sleep_manager.plasticity is restored.plasticity
+    assert _stable_q(restored, ["bin"], "go") > 0.0
+
+    with open(path, "rb") as handle:
+        payload = pickle.load(handle)
+    assert isinstance(payload.get("labile_layer"), dict)
+    payload.pop("labile_layer", None)
+    stripped = tmp_path / "no-labile-layer.pkl"
+    with open(stripped, "wb") as handle:
+        pickle.dump(payload, handle)
+
+    legacy = _build_agent(("go",), seed=3, wake_s=50.0)
+    legacy.sleep_manager.decay_rate_sleep = 0.0
+    previous_labile = legacy.labile
+    storage.load_agent(
+        legacy.hippocampus,
+        legacy.cortex,
+        legacy.selector,
+        str(stripped),
+        value_layer=legacy.value_layer,
+        agent=legacy,
+    )
+    assert legacy.labile is not previous_labile
+    assert legacy.labile._contributions == {}
+    assert labile_snapshot(legacy)["q"] == []
+    assert legacy.sleep_manager.labile is legacy.labile
+    assert legacy.sleep_manager.plasticity is legacy.plasticity
+    assert legacy.labile.config is legacy.plasticity
+    assert legacy.sleep_manager._host_agent is legacy
+    assert legacy.plasticity.expected_wake_interval_s == pytest.approx(1000.0)
+
+    legacy_stats = legacy.sleep(cycles=1)
+    assert not legacy_stats.get("error")
+    assert legacy.bg_action_channels["go"].go_weight == pytest.approx(0.57, abs=1e-9)
+    assert legacy.labile._contributions == {}
+    assert legacy.sleep_manager.labile is legacy.labile
+
+
+def test_sleep_rebinds_manager_when_the_agent_layer_was_replaced():
+    """``Agent.sleep`` consolidates the agent's current labile layer."""
+    from labile_layer import LabileLayer
+
+    agent = _build_agent(("go",), seed=1)
+    agent.sleep_manager.decay_rate_sleep = 0.0
+    replacement = LabileLayer(agent.plasticity)
+    agent.labile = replacement
+    assert agent.sleep_manager.labile is not replacement
+
+    stats = agent.sleep(cycles=1)
+    assert not stats.get("error")
+    assert agent.sleep_manager.labile is replacement
+    assert agent.sleep_manager.plasticity is agent.plasticity
+    assert agent.sleep_manager._host_agent is agent
+
+def test_load_keeps_a_foreign_sleep_manager_host(tmp_path):
+    """A shared manager keeps a host that is not the object passed as ``agent``.
+
+    Tamagochi loads through the cage (``agent=self``) while ``_host_agent``
+    stays the cognitive host. Labile and plasticity still move to the
+    restored objects; the host pointer is left for the cage's own rewire.
+    """
+    from storage import AgentStorage
+
+    source = _build_agent(("go",), seed=1, wake_s=1000.0)
+    source.commit_executed_transition(
+        action="go",
+        reward=1.0,
+        context_events=["bin"],
+        decided_action="go",
+        terminal=True,
+        dt=0.0,
+    )
+    storage = AgentStorage(save_dir=str(tmp_path))
+    path = storage.save_agent(
+        source.hippocampus,
+        source.cortex,
+        source.selector,
+        value_layer=source.value_layer,
+        sleep_manager=source.sleep_manager,
+        agent=source,
+        filename="cage.pkl",
+    )
+
+    class _Cage:
+        pass
+
+    cognitive = _build_agent(("go",), seed=4, wake_s=1000.0)
+    cage = _Cage()
+    cage.sleep_manager = cognitive.sleep_manager
+    cage.hippocampus = cognitive.hippocampus
+    cage.cortex = cognitive.cortex
+    cage.selector = cognitive.selector
+    cage.value_layer = cognitive.value_layer
+    cage.labile = cognitive.labile
+    cage.plasticity = cognitive.plasticity
+    assert cognitive.sleep_manager._host_agent is cognitive
+
+    storage.load_agent(
+        cage.hippocampus,
+        cage.cortex,
+        cage.selector,
+        path,
+        value_layer=cage.value_layer,
+        sleep_manager=cage.sleep_manager,
+        agent=cage,
+    )
+    assert cage.labile is not cognitive.labile
+    assert cage.sleep_manager.labile is cage.labile
+    assert cage.sleep_manager.plasticity is cage.plasticity
+    assert cage.labile._contributions
+    assert cage.sleep_manager._host_agent is cognitive
+
 
 def test_missing_dt_warns_once_and_explicit_dt_ignores_wall_clock(caplog, monkeypatch):
     agent = _build_agent(("go",), seed=8)

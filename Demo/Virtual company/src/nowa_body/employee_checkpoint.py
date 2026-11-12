@@ -126,24 +126,6 @@ def save_mind(agent: Any, path: Any) -> None:
         raise CheckpointError(str(exc)) from exc
 
 
-def _rebind_sleep_manager(agent: Any) -> None:
-    """Point the sleep manager at the labile layer and plasticity config in force.
-
-    ``AgentStorage.load_agent`` replaces ``agent.labile`` and ``agent.plasticity``
-    with restored objects, while the manager keeps the ones bound at
-    construction. Sleep prefers the manager's own references, so without this
-    capture would read an empty layer and default kappa/eta. References only:
-    configuration and learned state are untouched.
-    """
-    manager = getattr(agent, "sleep_manager", None)
-    if manager is None:
-        return
-    for name in ("labile", "plasticity"):
-        current = getattr(agent, name, None)
-        if current is not None:
-            setattr(manager, name, current)
-
-
 def load_mind(agent: Any, path: Any) -> None:
     ensure_core_src_on_path()
     from storage import AgentStorage
@@ -167,7 +149,6 @@ def load_mind(agent: Any, path: Any) -> None:
             conflict_arbitration=getattr(agent, "conflict_arbitration", None),
             agent=agent,
         )
-        _rebind_sleep_manager(agent)
         with target.open("rb") as stream:
             state = pickle.load(stream)
         if "vc_intent_memory" in state:

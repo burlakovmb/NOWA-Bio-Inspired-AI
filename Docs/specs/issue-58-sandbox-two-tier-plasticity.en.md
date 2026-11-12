@@ -33,11 +33,23 @@ do not call an external LLM from NOWA's runtime.
   context, and consequence. A known outcome must also be registered through
   `_record_known_outcome`; plain hippocampal storage is not enough for labile
   tags and two-tier capture. Do not silently swallow a real core learning error.
-- Restoring a mind must rebind `sleep_manager.labile` and `.plasticity` to the
-  agent's restored objects. The employee checkpoint adapter needs the same
-  mitigation. This fixes a core-storage reference gap without editing core.
-- Sandbox checkpoints must retain learned `IntentMemory` if present and relink
-  the manager on load. Older files lacking this extension remain loadable.
+- After restore, [`AgentStorage.load_agent`](../../src/storage.py) ([issue
+  #68](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/68)) calls
+  `_bind_restored_two_tier`: once `agent.labile` and `agent.plasticity` are
+  restored, each distinct `sleep_manager` (the `sleep_manager` argument and
+  `agent.sleep_manager` when present) receives those same object references.
+  `_host_agent` is set only when missing or already this agent. [`Agent.sleep()`](../../src/agent.py)
+  reapplies the same `labile`, `plasticity`, and `_host_agent` wiring before
+  consolidation. Pickle layout is unchanged; legacy saves without `labile_layer`
+  install a new empty layer the manager must share. Demo adapters no longer
+  ship `_rebind_sleep_manager` or `_rebind_learning_components`.
+- Sandbox checkpoints must retain learned `IntentMemory` when present via demo
+  extension `sandbox_intent_memory`
+  (`Demo/Virtual company/src/nowa_sandbox/sandbox_checkpoint.py`); core does
+  not serialize `intent_memory`. On load, the adapter relinks
+  `agent.intent_memory` and the manager. Employee checkpoints use
+  `vc_intent_memory` the same way. Older files without the extension key remain
+  loadable.
   Extend the agent file through a temporary sibling and atomic replacement.
   Invalid optional habit data must not abort a successful base restore: keep
   existing habits and report a warning. This does not make the whole metadata

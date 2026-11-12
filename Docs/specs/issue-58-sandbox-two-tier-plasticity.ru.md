@@ -34,11 +34,23 @@ English: [issue-58-sandbox-two-tier-plasticity.en.md](issue-58-sandbox-two-tier-
   `_record_known_outcome`; голого сохранения в гиппокамп недостаточно для
   labile-меток и двухуровневого захвата. Ошибку обучения настоящего ядра нельзя
   молча проглатывать.
-- После восстановления ума нужно перепривязать `sleep_manager.labile` и
-  `.plasticity` к восстановленным объектам агента. Та же защита нужна адаптеру
-  checkpoint сотрудника. Это обход дефекта ссылок core-storage без правки ядра.
-- Checkpoint песочницы сохраняет обученную `IntentMemory`, если она есть,
-  и перепривязывает менеджер при загрузке. Старые файлы без поля загружаются.
+- После восстановления [`AgentStorage.load_agent`](../../src/storage.py)
+  ([issue #68](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/68))
+  вызывает `_bind_restored_two_tier`: когда восстановлены `agent.labile` и
+  `agent.plasticity`, каждый из менеджеров сна (аргумент `sleep_manager` и
+  `agent.sleep_manager`, если есть) получает те же ссылки на объекты.
+  `_host_agent` задаётся только если его нет или это уже этот агент.
+  [`Agent.sleep()`](../../src/agent.py) перед консолидацией снова выставляет
+  `labile`, `plasticity` и `_host_agent`. Формат pickle не менялся; у legacy без
+  `labile_layer` создаётся новый пустой слой, который менеджер должен разделять.
+  Адаптеры демо больше не содержат `_rebind_sleep_manager` и
+  `_rebind_learning_components`.
+- Checkpoint песочницы сохраняет обученную `IntentMemory` через расширение демо
+  `sandbox_intent_memory`
+  (`Demo/Virtual company/src/nowa_sandbox/sandbox_checkpoint.py`); ядро
+  `intent_memory` не сериализует. При загрузке адаптер перепривязывает
+  `agent.intent_memory` и менеджер. У checkpoint сотрудника — `vc_intent_memory`
+  тем же способом. Старые файлы без ключа расширения загружаются.
   Дополнение файла агента выполняется через временный файл рядом и атомарную
   замену. Ошибочные необязательные данные привычек не срывают успешную загрузку
   основы: прежние привычки сохраняются, выводится предупреждение. Это не делает

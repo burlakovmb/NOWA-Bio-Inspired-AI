@@ -177,14 +177,8 @@ class SandboxTrainer:
         self.sleep_every_n_days = max(1, int(sleep_every_n_days))
         plasticity = getattr(self.agent, "plasticity", None)
         if plasticity is not None and hasattr(plasticity, "expected_wake_interval_s"):
+            # Same object Agent and load_agent bind onto the sleep manager.
             plasticity.expected_wake_interval_s = self.sleep_every_n_days * 86400.0
-        sleep_manager = getattr(self.agent, "sleep_manager", None)
-        if sleep_manager is not None:
-            if plasticity is not None:
-                sleep_manager.plasticity = plasticity
-            labile = getattr(self.agent, "labile", None)
-            if labile is not None:
-                sleep_manager.labile = labile
         self.stage_1a_baseline = dict(stage_1a_baseline or {})
         self.stage_1a_spread_iqr = dict(stage_1a_spread_iqr or {})
         self.last_decision_log: List[dict] = []

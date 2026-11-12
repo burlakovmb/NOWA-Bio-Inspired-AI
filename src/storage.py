@@ -5,6 +5,37 @@ import pickle
 from affect import AffectiveState
 
 
+def _bind_restored_two_tier(agent, sleep_manager) -> None:
+    """Point sleep managers at the labile layer and plasticity now on ``agent``.
+
+    ``load_agent`` replaces those objects. Consolidation reads the manager's
+    own references first, so a stale empty layer would drop the restored
+    tags. ``_host_agent`` is set only when it is missing or already this
+    agent: ``Agent.__init__`` binds the manager to the cognitive host, and a
+    cage that shares the manager must keep a different host it already has.
+    Reference assignment only; learned weights are not written here.
+    """
+    if agent is None:
+        return
+    managers = []
+    for manager in (sleep_manager, getattr(agent, "sleep_manager", None)):
+        if manager is None or any(manager is seen for seen in managers):
+            continue
+        managers.append(manager)
+    labile = getattr(agent, "labile", None)
+    plasticity = getattr(agent, "plasticity", None)
+    for manager in managers:
+        try:
+            if labile is not None:
+                setattr(manager, "labile", labile)
+            if plasticity is not None:
+                setattr(manager, "plasticity", plasticity)
+            if getattr(manager, "_host_agent", None) in (None, agent):
+                setattr(manager, "_host_agent", agent)
+        except Exception:
+            pass
+
+
 class AgentStorage:
     """Сохранение и загрузка состояния агента"""
     
@@ -1061,6 +1092,7 @@ class AgentStorage:
                     }
             except Exception:
                 pass
+            _bind_restored_two_tier(agent, sleep_manager)
 
         # Restore agent lifetime if provided
         if agent is not None and "agent_lifetime" in agent_state:
