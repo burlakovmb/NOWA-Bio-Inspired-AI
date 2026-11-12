@@ -3776,7 +3776,9 @@ class Agent:
             # when deep_sleep opens it. Decay is applied up front so the
             # tags capture sees are the ones at sleep onset.
 
-        # Delegate deep sleep to manager; ensure temporal and affect_state are attached
+        # Delegate deep sleep to manager. Rebind the organs it reads, including
+        # the labile tier: decay above used self.labile, and capture must see
+        # that same layer rather than a stale one left on the manager.
         try:
             setattr(self.sleep_manager, "temporal", self.temporal)
             setattr(self.sleep_manager, "affect_state", self.affect_state)
@@ -3787,6 +3789,11 @@ class Agent:
             setattr(self.sleep_manager, "bg_action_channels", self.bg_action_channels)
             setattr(self.sleep_manager, "bg_learning", self.bg_learning)
             setattr(self.sleep_manager, "bg_sleep_memories", self.bg_sleep_memories)
+            if getattr(self, "labile", None) is not None:
+                setattr(self.sleep_manager, "labile", self.labile)
+            if getattr(self, "plasticity", None) is not None:
+                setattr(self.sleep_manager, "plasticity", self.plasticity)
+            setattr(self.sleep_manager, "_host_agent", self)
         except Exception:
             pass
 
