@@ -1,13 +1,12 @@
-"""``load_mind`` keeps the sleep manager bound to the restored labile tier (D5, issue #58).
+"""Employee checkpoints keep sleep consolidation on the restored labile tier.
 
-``AgentStorage.load_agent`` replaces ``agent.labile`` and ``agent.plasticity``;
-the sleep manager used to keep the objects bound at construction, so a
-load -> lesson -> sleep sequence captured nothing and used default kappa/eta.
+``AgentStorage.load_agent`` rebinds the sleep manager to the restored
+``labile`` and ``plasticity``. These tests remain the regression for that
+contract: a pending tag, capture parameters, and a file that predates
+``vc_intent_memory``.
 """
 
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import pytest
 
@@ -135,7 +134,7 @@ def test_agent_sleep_after_load_matches_in_process_sleep(tmp_path):
     assert _weights(restored) == pytest.approx(_weights(source), abs=1e-9)
 
 
-def test_old_file_without_intent_memory_and_stub_without_labile(tmp_path):
+def test_old_file_without_intent_memory_keeps_restored_labile(tmp_path):
     source, _ = _agent_with_pending_lesson()
     path = tmp_path / "mind.pkl"
     save_mind(source, path)
@@ -151,12 +150,4 @@ def test_old_file_without_intent_memory_and_stub_without_labile(tmp_path):
     restored = spawn_employee_agent("buyer")
     load_mind(restored, path)
     assert restored.sleep_manager.labile is restored.labile
-
-    # Rebinding tolerates hosts that have no two-tier layer or no manager.
-    from nowa_body.employee_checkpoint import _rebind_sleep_manager
-
-    manager = SimpleNamespace()
-    _rebind_sleep_manager(SimpleNamespace(sleep_manager=manager))
-    assert not hasattr(manager, "labile")
-    _rebind_sleep_manager(SimpleNamespace(sleep_manager=None))
-    _rebind_sleep_manager(SimpleNamespace())
+    assert restored.sleep_manager.plasticity is restored.plasticity

@@ -319,21 +319,9 @@ def _load_agent_state(agent: Any, agent_path: Path) -> bool:
             conflict_arbitration=getattr(agent, "conflict_arbitration", None),
             agent=agent,
         )
-        _rebind_learning_components(agent)
         return True
     except Exception:
         return False
-
-
-def _rebind_learning_components(agent: Any) -> None:
-    """Keep sleep consolidation pointed at components restored onto the agent."""
-    manager = getattr(agent, "sleep_manager", None)
-    if manager is None:
-        return
-    for name in ("labile", "plasticity"):
-        current = getattr(agent, name, None)
-        if current is not None:
-            setattr(manager, name, current)
 
 
 def _extract_genome(agent: Any) -> Any:
