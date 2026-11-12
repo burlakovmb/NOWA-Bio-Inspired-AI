@@ -54,9 +54,15 @@ Legacy CLI не задаёт согласованное модельное ра�
 
 `save_mind` сотрудника сохраняет `IntentMemory` как `vc_intent_memory` внутри
 того же атомарного checkpoint. Песочница использует `sandbox_intent_memory`.
-Загрузка принимает старые файлы без этих ключей и перепривязывает ссылки
-sleep-manager к восстановленным объектам intent, labile и plasticity. Поправка
-ссылок защищает последующий сон, но не восстанавливает пропущенный старый захват.
+Загрузка принимает старые файлы без этих ключей. Ядро `AgentStorage.load_agent`
+([#68](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/68),
+`_bind_restored_two_tier` в `src/storage.py`) перепривязывает у каждого
+sleep manager `labile` и `plasticity` к восстановленным объектам агента;
+`Agent.sleep()` делает то же перед консолидацией. Адаптеры checkpoint демо
+восстанавливают `IntentMemory` из `vc_intent_memory` / `sandbox_intent_memory`
+и перепривязывают `intent_memory` на агенте и менеджере; ядро intent memory не
+сохраняет. Поправка ссылок защищает последующий сон, но не восстанавливает
+пропущенный старый захват.
 Загружать следует только доверенные локальные pickle-файлы.
 
 Роль может задавать `outcome_judge: module:factory`; композиция выбирает первый

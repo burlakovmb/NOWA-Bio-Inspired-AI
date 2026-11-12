@@ -37,4 +37,4 @@ comparing across line-ending conversions.
 
 This change makes the extension write atomic; it does not turn the complete metadata + agent-file pair into a transaction or make the preceding base save atomic. It cannot recover a damaged base checkpoint. Trusted local pickle assumptions remain unchanged.
 
-Full five-seed Stage 1a/1b qualification remains outstanding under #58. No trained employee is qualified, adopted, retrained or repaired by this change. The #68 demo rebind workarounds remain until the core correction lands. Optional clock, lesson-repeat and trajectory-helper changes are outside this correction.
+Full five-seed Stage 1a/1b qualification remains outstanding under #58. No trained employee is qualified, adopted, retrained or repaired by this change. At the time of this report, labile/plasticity rebind still depended on demo workarounds pending core #68; that correction now lives in `AgentStorage.load_agent` / `Agent.sleep()`. `IntentMemory` relink via `sandbox_intent_memory` remains a demo checkpoint concern. Optional clock, lesson-repeat and trajectory-helper changes are outside this correction.

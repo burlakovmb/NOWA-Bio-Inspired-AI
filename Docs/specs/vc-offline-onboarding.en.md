@@ -54,9 +54,15 @@ caller's responsibility. Episodic storage alone does not establish usable skill.
 
 Employee `save_mind` preserves `IntentMemory` under `vc_intent_memory` in the
 same atomic checkpoint. Sandbox persistence uses `sandbox_intent_memory`.
-Load accepts legacy files without these keys and reconnects sleep-manager
-references to restored intent, labile and plasticity objects. The reference
-correction protects future sleep; it does not repair missed historical capture.
+Load accepts legacy files without these keys. Core `AgentStorage.load_agent`
+([#68](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/68),
+`_bind_restored_two_tier` in `src/storage.py`) reconnects each sleep manager's
+`labile` and `plasticity` to the restored agent objects; `Agent.sleep()` does
+the same before consolidation. Demo checkpoint adapters restore `IntentMemory`
+from `vc_intent_memory` / `sandbox_intent_memory` and relink
+`intent_memory` on the agent and manager; core does not persist intent memory.
+The reference correction protects future sleep; it does not repair missed
+historical capture.
 Load only trusted local pickle files.
 
 A role may supply `outcome_judge: module:factory`; composition selects the first
