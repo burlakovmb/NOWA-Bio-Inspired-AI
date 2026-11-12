@@ -1,6 +1,11 @@
 role_id: procurement
 display_name: Procurement Manager
 event_classifier: nowa_roles.procurement.event_classifier:classify_procurement_events
+# Judge of delayed consequences: off for this role. With the budget a body
+# rule it adds nothing on average and pulls the buyer toward ordering without
+# money (docs_VC/10 §4.3). Uncomment when the buyer gets actions whose result
+# the body cannot check itself (urgent order, backup supplier).
+# outcome_judge: nowa_roles.procurement.outcome_judge:ProcurementOutcomeJudge
 # Rules of the body, not of judgement: an order never spends money that is
 # not there. A too-large order is shrunk to what the budget allows; with
 # nothing left it is not sent, and the buyer files "here, wait".

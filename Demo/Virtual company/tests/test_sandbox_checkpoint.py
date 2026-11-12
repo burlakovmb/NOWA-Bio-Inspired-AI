@@ -34,6 +34,79 @@ def _trainer(agent):
 
 class TestPersistence:
 
+    def test_resume_rebinds_custom_plasticity_and_pending_labile_tags(
+        self, sandbox_agent, tmp_path
+    ):
+        from learning_guard import labile_snapshot, stable_fingerprint
+
+        sandbox_agent.plasticity.capture_kappa = 0.31
+        sandbox_agent.plasticity.eta_labile_channel = 0.017
+        sandbox_agent.plasticity.eta_labile_q = 0.009
+        sandbox_agent.step(
+            ["event:stock_critical_low"], reward=0.8, dt=86400
+        )
+        path = save_checkpoint(
+            tmp_path / "pending.pkl", sandbox_agent, SandboxTrainingResult()
+        )
+        checkpoint = load_checkpoint(path)
+
+        resumed = create_procurement_agent("pending-resume", rng=random.Random(19))
+        assert restore_agent(checkpoint, resumed) is True
+        assert resumed.sleep_manager.labile is resumed.labile
+        assert resumed.sleep_manager.plasticity is resumed.plasticity
+        assert resumed.plasticity.capture_kappa == pytest.approx(0.31)
+        assert resumed.plasticity.eta_labile_channel == pytest.approx(0.017)
+        assert resumed.plasticity.eta_labile_q == pytest.approx(0.009)
+        assert labile_snapshot(resumed)
+        before_sleep = stable_fingerprint(resumed)
+
+        trainer = _trainer(resumed)
+        assert resumed.plasticity.expected_wake_interval_s == 5 * 86400
+        assert resumed.sleep_manager.labile is resumed.labile
+        assert resumed.sleep_manager.plasticity is resumed.plasticity
+        trainer._agent_sleep()
+        assert stable_fingerprint(resumed) != before_sleep
+
+    def test_checkpoint_preserves_sleep_formed_habits_and_manager_reference(
+        self, sandbox_agent, tmp_path
+    ):
+        sandbox_agent.step(
+            ["event:stock_critical_low"], reward=0.8, dt=86400
+        )
+        sandbox_agent.sleep(cycles=1)
+        saved_intents = sandbox_agent.intent_memory.to_dict()
+        assert saved_intents["traces"]
+        assert any(float(trace["strength"]) > 0.0 for trace in saved_intents["traces"])
+
+        path = save_checkpoint(
+            tmp_path / "habits.pkl", sandbox_agent, SandboxTrainingResult()
+        )
+        checkpoint = load_checkpoint(path)
+        resumed = create_procurement_agent("habit-resume", rng=random.Random(23))
+        assert restore_agent(checkpoint, resumed) is True
+        assert resumed.intent_memory.to_dict() == saved_intents
+        assert resumed.sleep_manager.intent_memory is resumed.intent_memory
+
+    def test_old_checkpoint_without_intent_extension_keeps_fresh_memory(
+        self, sandbox_agent, tmp_path
+    ):
+        import pickle
+
+        path = save_checkpoint(
+            tmp_path / "legacy.pkl", sandbox_agent, SandboxTrainingResult()
+        )
+        checkpoint = load_checkpoint(path)
+        with open(checkpoint.agent_state_path, "rb") as handle:
+            state = pickle.load(handle)
+        state.pop("sandbox_intent_memory", None)
+        with open(checkpoint.agent_state_path, "wb") as handle:
+            pickle.dump(state, handle)
+
+        resumed = create_procurement_agent("legacy-resume", rng=random.Random(29))
+        original_memory = resumed.intent_memory
+        assert restore_agent(checkpoint, resumed) is True
+        assert resumed.intent_memory is original_memory
+
     def test_checkpoint_roundtrip_preserves_hippocampus_size(
         self, sandbox_agent, tmp_path
     ):

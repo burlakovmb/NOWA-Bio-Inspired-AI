@@ -41,6 +41,7 @@ from .mock_mcp import MockMCPClient, MockMCPTool
 from .role_compose import compose_roles
 from .role_config import (
     build_encoder,
+    build_outcome_judge,
     build_seeder,
     build_tool_registry,
     resolve_event_classifier,
@@ -328,6 +329,7 @@ class EmployeeSession:
             sensor_refresh_interval_s=float(self.config.sensor_refresh_interval_s),
             simulated_tick_seconds=float(self.config.tick_interval_s),
             event_classifier=classifier,
+            outcome_judge=build_outcome_judge(composed),
             business_limits=list(composed.business_limits or []),
             limit_notifier=self._notify_limit,
             param_bindings=dict(composed.param_bindings or {}),

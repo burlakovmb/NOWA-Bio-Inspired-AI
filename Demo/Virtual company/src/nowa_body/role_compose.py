@@ -55,6 +55,12 @@ def compose_roles(role_ids: Sequence[str], roles_root: Any) -> RoleConfig:
     token_rules: Dict[str, Any] = {}
     for cfg in loaded:
         token_rules.update(dict(getattr(cfg, "token_rules", None) or {}))
+    # One judge per employee: the first role that names one owns the verdicts.
+    judge_path = next(
+        (str(cfg.outcome_judge_path).strip() for cfg in loaded
+         if str(getattr(cfg, "outcome_judge_path", "") or "").strip()),
+        "",
+    )
 
     # Limits add up: a call must fit every role's rules.
     limits = [dict(row) for cfg in loaded for row in (getattr(cfg, "business_limits", None) or [])]
@@ -74,6 +80,7 @@ def compose_roles(role_ids: Sequence[str], roles_root: Any) -> RoleConfig:
         mcp_servers=servers,
         event_classifier_paths=classifier_paths,
         token_rules=token_rules,
+        outcome_judge_path=judge_path,
         business_limits=limits,
     )
     validate_role_config(composed)

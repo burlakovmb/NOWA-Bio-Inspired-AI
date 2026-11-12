@@ -69,7 +69,7 @@ Effect on the procurement employee (VC simulator, hard world, 30 simulated days,
 
 ## 7. Out of scope
 
-- `Demo/Virtual company/src/nowa_sandbox/` (the procurement sandbox): its training loop still calls `sleep_manager.sleep_cycle()` and passes no `dt`. Tracked in a separate issue.
+- `Demo/Virtual company/src/nowa_sandbox/` (the procurement sandbox) was outside this employee-host change. Its separate adaptation is documented in [issue #58](issue-58-sandbox-two-tier-plasticity.en.md); the old curriculum results require requalification.
 - The platform runtime `src/mcp_body/runtime.py`: it still calls `step` without `dt` and sleeps through `sleep_manager.sleep_cycle()`. The employee overrides `run_cycle` and the decision cycle in the demo; fixing the platform runtime is a core change for the maintainer.
 - Core fallbacks, replay caps, plasticity coefficients.
 - Save/load gaps of the core (#16).

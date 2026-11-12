@@ -11,6 +11,7 @@ change only in sleep. The ACTION label is always ``action:<tool_id>``.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, List, Optional
 
 from ._compat import ensure_core_src_on_path
@@ -27,6 +28,64 @@ SYSTEM_DECIDER_PREFIX = "system:"
 # Executed without anyone judging it: remembered, but too faint to pull the
 # mind toward repeating it, and not tagged for sleep consolidation.
 UNJUDGED_INTENSITY = 0.1
+_MISSING = object()
+
+
+def _mark_independent_lesson(episode: Any) -> bool:
+    """Give one newly judged lesson its own sleep-credit trajectory.
+
+    Core ``Experience`` objects expose both writable slots. Small host stubs
+    may omit the metadata, so unsupported assignment is a bounded no-op. If a
+    dynamic stub accepts only the first write, restore its previous state.
+    """
+    episode_id = getattr(episode, "episode_id", None)
+    if not isinstance(episode_id, str) or not episode_id.strip():
+        return False
+
+    fields = (("trajectory_id", f"vc-lesson:{episode_id}"), ("episode_step", 0))
+    for name, _value in fields:
+        descriptor = inspect.getattr_static(type(episode), name, _MISSING)
+        if isinstance(descriptor, property) and descriptor.fset is None:
+            return False
+        if descriptor is _MISSING:
+            try:
+                vars(episode)
+            except TypeError:
+                slots = []
+                for base in type(episode).__mro__:
+                    declared = getattr(base, "__slots__", ())
+                    slots.extend((declared,) if isinstance(declared, str) else declared)
+                if name not in slots:
+                    return False
+
+    previous = {}
+    for name, _value in fields:
+        try:
+            previous[name] = getattr(episode, name)
+        except AttributeError:
+            previous[name] = _MISSING
+
+    assigned = []
+    try:
+        for name, value in fields:
+            assigned.append(name)
+            # A dynamic setter can mutate the field and then raise. Include
+            # the attempted field in rollback before invoking user code.
+            setattr(episode, name, value)
+    except (AttributeError, TypeError):
+        for name in reversed(assigned):
+            old_value = previous[name]
+            try:
+                if old_value is _MISSING:
+                    delattr(episode, name)
+                else:
+                    setattr(episode, name, old_value)
+            except (AttributeError, TypeError):
+                # Preflight handles normal read-only descriptors. This fallback
+                # covers unusual dynamic stubs while keeping lesson storage safe.
+                pass
+        return False
+    return True
 
 
 def is_unjudged(record: Any) -> bool:
@@ -131,6 +190,7 @@ def store_lesson(
     )
     if stored is None:
         return None
+    _mark_independent_lesson(stored)
     record = getattr(agent, "_record_known_outcome", None)
     if callable(record):
         # Capture reads the action from the episode; sleep's habit update

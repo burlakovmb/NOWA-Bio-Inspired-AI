@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -106,6 +107,15 @@ def save_mind(agent: Any, path: Any) -> None:
             filename=MIND_TMP_NAME,
             agent=agent,
         )
+        # AgentStorage omits IntentMemory. Keep this employee-owned extension
+        # inside the same atomic checkpoint rather than losing learned habits.
+        intent = getattr(agent, "intent_memory", None)
+        if intent is not None and callable(getattr(intent, "to_dict", None)):
+            with tmp.open("rb") as stream:
+                state = pickle.load(stream)
+            state["vc_intent_memory"] = intent.to_dict()
+            with tmp.open("wb") as stream:
+                pickle.dump(state, stream)
         os.replace(str(tmp), str(target))
     except Exception as exc:
         try:
@@ -114,6 +124,24 @@ def save_mind(agent: Any, path: Any) -> None:
         except OSError:
             pass
         raise CheckpointError(str(exc)) from exc
+
+
+def _rebind_sleep_manager(agent: Any) -> None:
+    """Point the sleep manager at the labile layer and plasticity config in force.
+
+    ``AgentStorage.load_agent`` replaces ``agent.labile`` and ``agent.plasticity``
+    with restored objects, while the manager keeps the ones bound at
+    construction. Sleep prefers the manager's own references, so without this
+    capture would read an empty layer and default kappa/eta. References only:
+    configuration and learned state are untouched.
+    """
+    manager = getattr(agent, "sleep_manager", None)
+    if manager is None:
+        return
+    for name in ("labile", "plasticity"):
+        current = getattr(agent, name, None)
+        if current is not None:
+            setattr(manager, name, current)
 
 
 def load_mind(agent: Any, path: Any) -> None:
@@ -139,6 +167,19 @@ def load_mind(agent: Any, path: Any) -> None:
             conflict_arbitration=getattr(agent, "conflict_arbitration", None),
             agent=agent,
         )
+        _rebind_sleep_manager(agent)
+        with target.open("rb") as stream:
+            state = pickle.load(stream)
+        if "vc_intent_memory" in state:
+            from intent_memory import IntentMemory
+            from learning_guard import initializing
+
+            # Loading is restoration, not a waking learning update.
+            with initializing():
+                agent.intent_memory = IntentMemory.from_dict(state["vc_intent_memory"])
+                manager = getattr(agent, "sleep_manager", None)
+                if manager is not None:
+                    manager.intent_memory = agent.intent_memory
     except Exception as exc:
         raise CheckpointError(str(exc)) from exc
 
