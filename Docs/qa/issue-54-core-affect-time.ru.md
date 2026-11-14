@@ -1,6 +1,6 @@
 # QA issue #54 — аффект в симулированных секундах (ядро)
 
-Ветка: `team/issue-54-core-affect-time`. HEAD: `80b7054`. PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/72. Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/54.
+Ветка: `team/issue-54-core-affect-time`. Код под проверкой: `80b7054` (следующий `bb748a1` — только документация). PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/72. Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/54.
 
 Код продукта не менялся. Полный pytest локально не гонялся. CI на `80b7054` принят как зелёный (2185 тестов), повторно не проверялся. Машина: Python 3.12.3, pytest 9.2.0.
 
