@@ -40,8 +40,9 @@ do not call an external LLM from NOWA's runtime.
   `agent.sleep_manager` when present) receives those same object references.
   `_host_agent` is set only when missing or already this agent. [`Agent.sleep()`](../../src/agent.py)
   reapplies the same `labile`, `plasticity`, and `_host_agent` wiring before
-  consolidation. Pickle layout is unchanged; legacy saves without `labile_layer`
-  install a new empty layer the manager must share. Demo adapters no longer
+  consolidation. Agent sidecars use `nowa-agent-state` schema `1` (`.ckpt.agent.nowa`);
+  pickle checkpoints are rejected. Saves without `labile_layer` install a new empty
+  layer the manager must share. Demo adapters no longer
   ship `_rebind_sleep_manager` or `_rebind_learning_components`.
 - Sandbox checkpoints must retain learned `IntentMemory` when present via demo
   extension `sandbox_intent_memory`

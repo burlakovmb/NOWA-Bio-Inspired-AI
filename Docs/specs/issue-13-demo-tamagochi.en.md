@@ -68,8 +68,8 @@ Fast affect, neuromodulator levels, wakefulness, drives, and the scheduling cycl
 - Channel objects are built in `__init__` before their weights are sealed.
 - `load_nowa_state` still assigns saved `go_weight` / `nogo_weight` / `habit_strength` inside `initializing()`.
 - The same JSON now also stores `plasticity`, `labile`, `host_clock_s`, and `pending_owner_feedback`. Restore happens before `_rewire_two_tier_host`.
-- `AgentStorage.load_agent` / `save_agent` receive the cage as `agent`. Once `labile`, `plasticity`, and `bg_action_channels` live on the cage, the core storage path persists them. After either load, `_rewire_two_tier_host` points `nowa` at the restored value layer, channels, labile layer, and clock, and sets `expected_wake_interval_s` again if a pickle from before this change installed an empty `PlasticityConfig`.
-- An empty `bg_action_channels` dict in those older pickles is not a channel table (the cage used to save `{}` because the attribute was missing). It is ignored. A non-empty table replaces `bg_channels`.
+- `AgentStorage.load_agent` / `save_agent` receive the cage as `agent`. Once `labile`, `plasticity`, and `bg_action_channels` live on the cage, the core storage path persists them in `agent_save.nowa` (`nowa-agent-state` schema `1`). After either load, `_rewire_two_tier_host` points `nowa` at the restored value layer, channels, labile layer, and clock.
+- Legacy pickle session files (`.pkl`) are rejected; recreate the session save from the running demo. See [issue-16-31-safe-agent-state.en.md](issue-16-31-safe-agent-state.en.md).
 
 ## 5. Check
 

@@ -63,7 +63,7 @@ from `vc_intent_memory` / `sandbox_intent_memory` and relink
 `intent_memory` on the agent and manager; core does not persist intent memory.
 The reference correction protects future sleep; it does not repair missed
 historical capture.
-Load only trusted local pickle files.
+Load only trusted local `.nowa` / `.ckpt` files written by this build (`nowa-agent-state` schema `1`, sandbox checkpoint schema `2`). Legacy pickle saves are rejected.
 
 A role may supply `outcome_judge: module:factory`; composition selects the first
 nonempty judge in role order. Its `observe` method returns lessons about delayed

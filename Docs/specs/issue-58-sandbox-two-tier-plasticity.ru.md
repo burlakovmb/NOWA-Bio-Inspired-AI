@@ -41,7 +41,8 @@ English: [issue-58-sandbox-two-tier-plasticity.en.md](issue-58-sandbox-two-tier-
   `agent.sleep_manager`, если есть) получает те же ссылки на объекты.
   `_host_agent` задаётся только если его нет или это уже этот агент.
   [`Agent.sleep()`](../../src/agent.py) перед консолидацией снова выставляет
-  `labile`, `plasticity` и `_host_agent`. Формат pickle не менялся; у legacy без
+  `labile`, `plasticity` и `_host_agent`. Sidecar агента — `nowa-agent-state` схема `1`
+  (`.ckpt.agent.nowa`); pickle-чекпоинты отвергаются. У legacy без
   `labile_layer` создаётся новый пустой слой, который менеджер должен разделять.
   Адаптеры демо больше не содержат `_rebind_sleep_manager` и
   `_rebind_learning_components`.

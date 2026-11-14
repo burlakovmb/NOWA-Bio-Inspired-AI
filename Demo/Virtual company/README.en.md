@@ -27,3 +27,5 @@ Each lab has separate EN and RU buttons, and the active one is highlighted. The 
 Checks: `python -m pytest -m "not slow"`.
 
 Normative specifications in `Docs/` retain module contracts. Their prefaces, in Russian and in English, refer to the scientific account.
+
+Training checkpoints are `*.ckpt` (metadata, schema `2`) plus `*.ckpt.agent.nowa` (agent state). The employee host writes `mind.nowa` on stop. Pickle checkpoints are rejected; recreate after upgrading — [Docs/specs/issue-16-31-safe-agent-state.en.md](../../Docs/specs/issue-16-31-safe-agent-state.en.md).

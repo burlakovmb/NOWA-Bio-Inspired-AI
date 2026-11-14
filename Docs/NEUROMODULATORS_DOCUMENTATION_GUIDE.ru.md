@@ -242,7 +242,7 @@ pytest tests/test_neuromodulators.py -v
 python src/gui.py
 
 # Посмотреть, как сохраняются нейромодуляторы
-python -c "import pickle; print(pickle.load(open('saves/agent_state.pkl', 'rb'))['neuromodulators'])"
+python -c "import json; from storage import read_agent_state; print(json.dumps(read_agent_state('saves/agent_save.nowa').get('neuromodulators'), indent=2))"
 ```
 
 ---

@@ -6,7 +6,7 @@ The employee-host specification introduces a layer beside the role configurator 
 
 Write parameters are assembled by `SchemaBinder`. Decision channels are write-tool identifiers and `wait_and_monitor`. The mind does not import the protocol. Sleep is the consolidation phase `sleep_cycle` and is set in wall-clock seconds separately from the tick interval; the card example is a tick of 1 s, sleep no more often than once per 3,600 s, a circadian window of hours 2–5, and a fatigue threshold of 0.85. Sleep does not follow from the fact of a tick. Role membership changes only in the `stopped` state; editing a role YAML while a session is running leaves the session with the snapshot from start and marks a stale-role plaque. Seeding runs only when memory is empty and is not repeated after a stop and a later start. An unavailable live transport at start moves the employee to `error` and is not replaced by a mock. Polling concerns only organs with `poll: true`; a write cannot carry that flag. Approval is visible on the card and as a pending count in the list. Badge states are stopped, starting, running, sleeping, awaiting approval, stopping, and error; awaiting approval does not stop ticks.
 
-Constraints H1–H17 include a single write point through `ApprovalGate`, a prohibition on automatic execution of a high or irreversible write, `decision_only=True` on a waking tick, a prohibition on importing `nowa_sandbox`, a prohibition on adding axes to affective space, and a requirement that `mind.pkl` be written successfully for a normal stop. Several roles of one employee are folded by a union of organs keyed by `tool_id`; the same key at a different risk level is a configuration error, and one tool name on different servers yields two organs. Acceptance of this host version is performed on a mock: start, ticks, stop, restoration of the episode count, and independence of the sleep period from the number of ticks, including a tick of 60 s and a minimum sleep interval of 3,600 s. A live Drive run is assigned to the next manual step and is not part of the automated tests of this delivery. There is no limit on the number of employees or on the number of sessions running at once.
+Constraints H1–H17 include a single write point through `ApprovalGate`, a prohibition on automatic execution of a high or irreversible write, `decision_only=True` on a waking tick, a prohibition on importing `nowa_sandbox`, a prohibition on adding axes to affective space, and a requirement that `mind.nowa` be written successfully for a normal stop. Several roles of one employee are folded by a union of organs keyed by `tool_id`; the same key at a different risk level is a configuration error, and one tool name on different servers yields two organs. Acceptance of this host version is performed on a mock: start, ticks, stop, restoration of the episode count, and independence of the sleep period from the number of ticks, including a tick of 60 s and a minimum sleep interval of 3,600 s. A live Drive run is assigned to the next manual step and is not part of the automated tests of this delivery. There is no limit on the number of employees or on the number of sessions running at once.
 
 ---
 
@@ -295,7 +295,7 @@ Demo/Virtual company/src/nowa_employees/
   <agent_id>/
     employee.yaml
     .history/employee_<timestamp>.yaml
-    mind.pkl                 # full mind checkpoint (section 5.7)
+    mind.nowa                 # full mind checkpoint (section 5.7)
     session_sidecar.json     # WorldState, approval queue, sleep scheduler
 ```
 
@@ -351,7 +351,7 @@ File constraints:
 | **E1** | The GUI does not write `nowa_roles/**` when an employee is created or started |
 | **E2** | `role_ids` refer to existing `nowa_roles/<id>/config.yaml` files |
 | **E3** | An empty `role_ids` is a load error, not “an employee with no organs” |
-| **E4** | The checkpoint (`mind.pkl`) belongs to this `agent_id`; a foreign file is not mixed in |
+| **E4** | The checkpoint (`mind.nowa`) belongs to this `agent_id`; a foreign file is not mixed in |
 
 ---
 
@@ -412,7 +412,7 @@ nowa_body/
   role_compose.py             # compose_roles()
   mcp_router.py               # server_id → MCPTransport
   sensor_poller.py            # which READ tools to call, and with which arguments
-  employee_checkpoint.py      # mind.pkl and the sidecar through AgentStorage
+  employee_checkpoint.py      # mind.nowa and the sidecar through AgentStorage
   employee_session.py         # runtime and the cooperative loop
   gui_configurator.py         # the employee section (view)
   gui_employee_controller.py
@@ -449,7 +449,7 @@ and its tests are not obliged to change in this delivery.
      and do **not** call seed;
    - if there is no checkpoint **or** memory is empty (no hippocampal episodes),
      and `seed_intuition: true`, call `build_seeder(composed).seed_agent`;
-   - a broken pickle yields status `error`, and seed is **not** substituted silently
+   - a corrupt or unreadable `mind.nowa` yields status `error`, and seed is **not** substituted silently
      (that would destroy identity). On the card, the action “reset memory”
      is explicit and requires confirmation.
 8. `BusinessAgentRuntime`: ApprovalGate, encoder, `param_bindings` and
@@ -463,7 +463,7 @@ and its tests are not obliged to change in this delivery.
     (WRITE items not yet executed), and the SleepScheduler counters.
 11. Start the worker (section 5.4).
 
-“Memory is empty” means there is no `mind.pkl`, or after load the hippocampus has 0 experiences.
+“Memory is empty” means there is no `mind.nowa`, or after load the hippocampus has 0 experiences.
 A later Start after Stop always follows the restoration branch, not the seed branch.
 
 ### 5.2 Call routing (`mcp_router`)
@@ -588,20 +588,20 @@ Contents of the checkpoint:
 
 | File | Contents |
 |---|---|
-| `mind.pkl` | Everything that `AgentStorage.save_agent` writes when `agent=` is passed: hippocampus, cortex, selector (plus channel metadata), A(t), affect, sleep_manager, neuromodulators, value layer, conflict arbitration, wakefulness / Process S, and the other fields that storage already serialises |
+| `mind.nowa` | Everything that `AgentStorage.save_agent` writes when `agent=` is passed: hippocampus, cortex, selector (plus channel metadata), A(t), affect, sleep_manager, neuromodulators, value layer, conflict arbitration, wakefulness / Process S, and the other fields that storage already serialises |
 | `session_sidecar.json` | `WorldState` (results/entities/scalars/stats), PENDING approval records, elapsed `sleep.min_interval`, tick_index, the timestamp of the stop, and the hash or mtime of the roles with which the session was assembled (for the stale plaque) |
 
-Order on Stop: first `mind.pkl` (atomically: write `mind.pkl.tmp`, then
+Order on Stop: first `mind.nowa` (atomically: write `mind.nowa.tmp`, then
 replace), then the sidecar. Reading on Start: the mind, then the sidecar; a broken sidecar
 does not cancel the restored mind (the approval queue is then empty, and WorldState
 fills from the first READ calls).
 
 A restart because roles changed: Stop (checkpoint), then compose the new YAML, then Start with
-the same `mind.pkl`. Organs in the selector are registered again after compose
+the same `mind.nowa`. Organs in the selector are registered again after compose
 (`register_organs_on_agent`); old channels that are no longer in the composition
 remain in the selector metadata, but the runtime does not offer them as muscles.
 
-An explicit “reset memory” on the card (while stopped) deletes `mind.pkl` and the sidecar
+An explicit “reset memory” on the card (while stopped) deletes `mind.nowa` and the sidecar
 after confirmation. The next Start means empty memory, and therefore a seed if seeding is enabled.
 
 ---
@@ -658,7 +658,7 @@ passed before one declares that “the employee works with a base”.
 | **H10** | A role dry run does not start an `EmployeeSession` |
 | **H11** | Sleep is no more frequent than `sleep.min_interval_s` of wall-clock time; the tick and sleep are independent fields |
 | **H12** | Seed only when memory is empty. Start after Stop does not re-seed the hippocampus |
-| **H13** | A stop without a successful write of `mind.pkl` is not counted as a “normal stopped” without a message about the save error |
+| **H13** | A stop without a successful write of `mind.nowa` is not counted as a “normal stopped” without a message about the save error |
 | **H14** | There is no limit on the number of employees or on the number of simultaneous `running` sessions |
 | **H15** | Approval: the card only, plus a `pending` counter in the list. No toast, no sound, no modal |
 | **H16** | The host polls only `poll: true`. The checkbox is on every tool of the role; a WRITE cannot be poll |
@@ -678,7 +678,7 @@ File: `Demo/Virtual company/tests/test_employee_host.py` (plus the controller).
 - `sensor_poller`: the poll set contains only `poll: true`; a WRITE with `poll: true` does not
   load; a READ with `poll: false` is not called, even if required is empty.
 - GUI Tools: the poll checkbox is on READ; on WRITE it is disabled.
-- A mock session: start, then N ticks, then stop, then `mind.pkl` exists, then start, then
+- A mock session: start, then N ticks, then stop, then `mind.nowa` exists, then start, then
   the episode count is at least that after the first stop, and a second seed does not add duplicates
   (or the seeder was not called — an explicit check).
 - An empty employee (no mind): start with `seed_intuition: true` seeds the corpus.

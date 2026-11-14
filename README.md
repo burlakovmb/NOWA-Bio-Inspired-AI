@@ -148,7 +148,7 @@ Reading order: [Docs/START_HERE_NEW.en.md](Docs/START_HERE_NEW.en.md).
 
 ### Subject
 
-During waking the agent records episodes, activates memory, and selects an action using stable plus labile effective values. The host passes elapsed time (`dt` or `advance_time`) and calls `sleep()` when its schedule requires consolidation; stable parameters do not change between sleeps. Neuromodulators modulate state and sleep replay. The genome encodes inheritable coefficients of the subsystems; the epigenome carries a bounded set of traces already consolidated. Host contract and plasticity parameters: [Docs/architecture/two-tier-plasticity.en.md](Docs/architecture/two-tier-plasticity.en.md). The cognitive core does not import the protocol of external tools.
+During waking the agent records episodes, activates memory, and selects an action using stable plus labile effective values. The host passes elapsed time (`dt` or `advance_time`) and calls `sleep()` when its schedule requires consolidation; stable parameters do not change between sleeps. Neuromodulators modulate state and sleep replay. The genome encodes inheritable coefficients of the subsystems; the epigenome carries a bounded set of traces already consolidated. Host contract and plasticity parameters: [Docs/architecture/two-tier-plasticity.en.md](Docs/architecture/two-tier-plasticity.en.md). Agent persistence is UTF-8 JSON (`.nowa`), not pickle; see [Docs/specs/issue-16-31-safe-agent-state.en.md](Docs/specs/issue-16-31-safe-agent-state.en.md). Legacy `.pkl` saves must be recreated. The cognitive core does not import the protocol of external tools.
 
 ### Repository layout
 

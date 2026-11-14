@@ -68,8 +68,8 @@
 - Объекты каналов создаются в `__init__` до опечатывания весов.
 - `load_nowa_state` по-прежнему присваивает сохранённые `go_weight` / `nogo_weight` / `habit_strength` внутри `initializing()`.
 - Тот же JSON теперь хранит ещё `plasticity`, `labile`, `host_clock_s` и `pending_owner_feedback`. Восстановление идёт до `_rewire_two_tier_host`.
-- `AgentStorage.load_agent` / `save_agent` получают клетку как `agent`. Когда на клетке есть `labile`, `plasticity` и `bg_action_channels`, путь хранилища ядра их сохраняет. После любой загрузки `_rewire_two_tier_host` направляет `nowa` на восстановленные таблицу ценности, каналы, лабильный слой и часы и снова задаёт `expected_wake_interval_s`, если pickle до этого изменения поставил пустой `PlasticityConfig`.
-- Пустой словарь `bg_action_channels` в таких старых pickle — не таблица каналов (клетка сохраняла `{}`, потому что атрибута не было). Он игнорируется. Непустая таблица заменяет `bg_channels`.
+- `AgentStorage.load_agent` / `save_agent` получают клетку как `agent`. Когда на клетке есть `labile`, `plasticity` и `bg_action_channels`, ядро пишет их в `agent_save.nowa` (`nowa-agent-state`, схема `1`). После load `_rewire_two_tier_host` направляет `nowa` на восстановленные таблицу ценности, каналы, лабильный слой и часы.
+- Старые pickle (`.pkl`) отвергаются; сессию сохраняют заново из демо. См. [issue-16-31-safe-agent-state.ru.md](issue-16-31-safe-agent-state.ru.md).
 
 ## 5. Проверка
 
