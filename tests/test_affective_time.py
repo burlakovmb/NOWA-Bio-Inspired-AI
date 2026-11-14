@@ -176,6 +176,31 @@ def test_decision_only_recall_advances_affect_once():
     assert calls.count(0.0) == 1
 
 
+def test_decision_only_recall_dt_zero_commit_keeps_zero_elapsed():
+    hip = NOWAHippocampus(max_experiences=8)
+    cortex = CortexMemory()
+    intent = IntentMemory()
+    sleep = SleepManager(hip, cortex, intent)
+    selector = ActionSelector(actions=["go", "stop"])
+    agent = Agent(hip, cortex, selector, sleep, intent)
+    agent.register_action_channel("go", go_weight=0.4, nogo_weight=0.4, habit_strength=0.1)
+    agent.register_action_channel("stop", go_weight=0.4, nogo_weight=0.4, habit_strength=0.1)
+
+    calls = []
+    original = agent.affective_space.step
+
+    def wrapped(**kwargs):
+        calls.append(float(kwargs.get("time_elapsed", 1.0)))
+        return original(**kwargs)
+
+    agent.affective_space.step = wrapped
+    agent.affective_space.constrained_recall_from_experiences = lambda experiences: {"stress": 0.25}
+
+    agent.step(["nest"], decision_only=True, dt=0)
+    agent.commit_executed_transition("go", reward=0.0, context_events=["nest"])
+    assert calls == [0.0, 0.0]
+
+
 def test_setpoint_roundtrip_and_missing_field(tmp_path):
     hip = NOWAHippocampus()
     cortex = CortexMemory()

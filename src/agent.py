@@ -1034,6 +1034,8 @@ class Agent:
             pending = {}
         if effective_modulation is None:
             effective_modulation = pending.get("effective_modulation") or {}
+        step_elapsed = pending.get("step_elapsed", 1.0)
+        time_elapsed = pending.get("time_elapsed", 1.0)
         self._commit_waking_transition(
             action=str(action or ""),
             context_events=context_events,
@@ -1044,8 +1046,8 @@ class Agent:
             novelty=novelty,
             conflict=conflict,
             affective_inputs=affective_inputs,
-            step_elapsed=float(pending.get("step_elapsed", 1.0) or 1.0),
-            time_elapsed=float(pending.get("time_elapsed", 1.0) or 1.0),
+            step_elapsed=float(1.0 if step_elapsed is None else step_elapsed),
+            time_elapsed=float(1.0 if time_elapsed is None else time_elapsed),
             stable_repetition=bool(pending.get("stable_repetition", False)),
             path=path,
             effective_modulation=dict(effective_modulation or {}),
@@ -3654,7 +3656,7 @@ class Agent:
                 "traces": traces,
                 "wakefulness": wakefulness,
                 "lifetime_progress": lifetime_progress,
-                "time_elapsed": float(step_elapsed or 1.0),
+                "time_elapsed": float(1.0 if step_elapsed is None else step_elapsed),
                 "agent_lifetime": agent_lifetime,
                 "timestamp": time.time(),
                 "axes": axes,
