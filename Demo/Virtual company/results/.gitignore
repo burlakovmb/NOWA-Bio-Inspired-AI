@@ -2,7 +2,8 @@
 # They stay on disk for local resume testing but are regenerated, not tracked:
 #   python src/nowa_sandbox/run_sandbox.py --checkpoint results/<name>.ckpt
 *.ckpt
-*.ckpt.agent.pkl
+*.ckpt.agent.nowa
+*.pkl
 
 # Per-run JSON summaries are small and readable, so they are kept.
 !*.json

@@ -6,9 +6,35 @@ from affect import AffectiveState
 from state_codec import (
     AGENT_STATE_FORMAT,
     AGENT_STATE_SCHEMA_VERSION,
+    StateFormatError,
     dump_state,
     load_state,
 )
+
+
+# Containers load_agent assigns onto the live objects. cortex.patterns is a list
+# of cortical traces, the same shape as hippocampus.experiences.
+_WHOLESALE_CONTAINERS = (
+    ("hippocampus_experiences", list, True),
+    ("cortex_patterns", list, True),
+    ("selector_actions", list, False),
+    ("hippocampus_decision", dict, False),
+)
+
+
+def _validate_agent_containers(agent_state):
+    """Reject a document that would replace a live container with the wrong type."""
+    if not isinstance(agent_state, dict):
+        raise StateFormatError("agent state must be an object")
+    for key, expected, required in _WHOLESALE_CONTAINERS:
+        if key not in agent_state:
+            if required:
+                raise StateFormatError(f"agent state is missing {key}")
+            continue
+        value = agent_state[key]
+        if not isinstance(value, expected):
+            kind = "a list" if expected is list else "an object"
+            raise StateFormatError(f"agent state field {key} must be {kind}")
 
 
 def read_agent_state(path):
@@ -460,6 +486,7 @@ class AgentStorage:
             expected_format=AGENT_STATE_FORMAT,
             supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
         )
+        _validate_agent_containers(agent_state)
         if value_layer is None and agent is not None and hasattr(agent, "value_layer"):
             value_layer = getattr(agent, "value_layer", None)
         if conflict_arbitration is None and agent is not None and hasattr(agent, "conflict_arbitration"):

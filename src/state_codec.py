@@ -143,8 +143,11 @@ def _looks_like_pickle(raw: bytes) -> bool:
         return False
     if raw.startswith(b"\x80"):
         return True
-    head = raw.lstrip()[:8]
-    return head.startswith((b"(dp", b"(i", b"(I", b"}q", b"]q", b"ccopy_reg", b"c__builtin__"))
+    head = raw.lstrip()
+    # Protocol 0/1: GLOBAL (`cos\\nsystem`), MARK, EMPTY_DICT, EMPTY_LIST.
+    if head[:1] in (b"c", b"(", b"]", b"}"):
+        return True
+    return head.startswith((b"I", b"V", b"S"))
 
 
 def _ensure_registry() -> None:

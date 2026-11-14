@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import pickle
+import sys
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -199,3 +202,110 @@ def test_pickle_and_unknown_schema_are_rejected(tmp_path):
     }), encoding="utf-8")
     with pytest.raises(StateFormatError, match="something-else"):
         storage.load_agent(hippocampus, cortex, selector, str(foreign))
+
+
+def _write_schema(path, state):
+    path.write_text(json.dumps({
+        "format": AGENT_STATE_FORMAT,
+        "schema_version": 1,
+        "state": state,
+    }), encoding="utf-8")
+
+
+def test_malformed_containers_leave_live_state(tmp_path):
+    storage = AgentStorage(save_dir=str(tmp_path))
+    agent = _build_agent(("go", "stop"), seed=2)
+    agent.hippocampus.experiences.append("kept-episode")
+    agent.cortex.patterns.append("kept-pattern")
+    experiences = agent.hippocampus.experiences
+    patterns = agent.cortex.patterns
+    signatures = agent.hippocampus.signatures
+    path = tmp_path / "malformed.nowa"
+    _write_schema(path, {
+        "hippocampus_experiences": "not-a-list",
+        "cortex_patterns": "not-a-dict",
+    })
+    with pytest.raises(StateFormatError, match="hippocampus_experiences"):
+        storage.load_agent(
+            agent.hippocampus,
+            agent.cortex,
+            agent.selector,
+            str(path),
+            agent=agent,
+        )
+    assert agent.hippocampus.experiences is experiences
+    assert agent.hippocampus.experiences == ["kept-episode"]
+    assert agent.cortex.patterns is patterns
+    assert agent.cortex.patterns == ["kept-pattern"]
+    assert agent.hippocampus.signatures is signatures
+
+
+def _os_system_pickle(marker: Path) -> bytes:
+    class _Touch:
+        def __reduce__(self):
+            return (__import__("os").system, (f"touch {marker}",))
+
+    return pickle.dumps(_Touch(), protocol=0)
+
+
+def _os_system_global(marker: Path) -> bytes:
+    command = f"touch {marker}"
+    return b"cos\nsystem\n(V" + command.encode("utf-8") + b"\ntR."
+
+
+def _vc_loaders():
+    root = Path(__file__).resolve().parents[1]
+    demo_src = root / "Demo" / "Virtual company" / "src"
+    if str(demo_src) not in sys.path:
+        sys.path.insert(0, str(demo_src))
+    from nowa_body.employee_checkpoint import CheckpointError as MindCheckpointError
+    from nowa_body.employee_checkpoint import load_mind
+    from nowa_sandbox.sandbox_checkpoint import CheckpointError as SandboxCheckpointError
+    from nowa_sandbox.sandbox_checkpoint import load_checkpoint
+
+    return load_checkpoint, SandboxCheckpointError, load_mind, MindCheckpointError
+
+
+def test_pickle_payloads_do_not_run(tmp_path):
+    marker = tmp_path / "executed-marker"
+    storage = AgentStorage(save_dir=str(tmp_path))
+    agent = _build_agent(("go",), seed=3)
+    load_checkpoint, sandbox_error, load_mind, mind_error = _vc_loaders()
+    mind = SimpleNamespace()
+    payloads = (
+        _os_system_pickle(marker),
+        _os_system_global(marker),
+    )
+    for index, payload in enumerate(payloads):
+        path = tmp_path / f"payload-{index}.bin"
+        path.write_bytes(payload)
+        with pytest.raises(StateFormatError):
+            storage.load_agent(agent.hippocampus, agent.cortex, agent.selector, str(path))
+        with pytest.raises(sandbox_error):
+            load_checkpoint(path)
+        with pytest.raises(mind_error):
+            load_mind(mind, path)
+        assert not marker.exists()
+    assert agent.hippocampus.experiences == []
+    assert agent.cortex.patterns == []
+
+
+def test_broken_json_and_unknown_type_are_rejected(tmp_path):
+    storage = AgentStorage(save_dir=str(tmp_path))
+    agent = _build_agent(("go",), seed=4)
+    agent.hippocampus.experiences.append("kept")
+    experiences = agent.hippocampus.experiences
+    patterns = agent.cortex.patterns
+
+    broken = tmp_path / "broken.nowa"
+    broken.write_bytes(b"{\"format\": ")
+    with pytest.raises(StateFormatError):
+        storage.load_agent(agent.hippocampus, agent.cortex, agent.selector, str(broken))
+
+    unknown = tmp_path / "unknown.nowa"
+    _write_schema(unknown, {"__nowa_type__": "os.system"})
+    with pytest.raises(StateFormatError, match="unknown"):
+        storage.load_agent(agent.hippocampus, agent.cortex, agent.selector, str(unknown))
+
+    assert agent.hippocampus.experiences is experiences
+    assert agent.cortex.patterns is patterns
