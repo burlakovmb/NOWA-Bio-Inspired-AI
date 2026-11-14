@@ -67,9 +67,8 @@ save_path = storage.save_agent(
 print(f"   Saved to: {save_path}")
 
 # Check what's in the save file
-import pickle
-with open(save_path, 'rb') as f:
-    saved_data = pickle.load(f)
+from storage import read_agent_state
+saved_data = read_agent_state(save_path)
     
 print(f"   Save contains 'sleep_manager': {'sleep_manager' in saved_data}")
 if 'sleep_manager' in saved_data:

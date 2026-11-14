@@ -1,20 +1,45 @@
 """Failure boundaries for the optional sandbox habits checkpoint extension."""
 
 import logging
-import pickle
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from nowa_sandbox import sandbox_checkpoint as checkpoint
 from nowa_sandbox.training_loop import SandboxTrainingResult
+from state_codec import (
+    AGENT_STATE_FORMAT,
+    AGENT_STATE_SCHEMA_VERSION,
+    StateFormatError,
+    dump_state,
+    load_state,
+)
+
+
+def _write(path, state):
+    dump_state(
+        path,
+        state,
+        format_id=AGENT_STATE_FORMAT,
+        schema_version=AGENT_STATE_SCHEMA_VERSION,
+    )
+
+
+def _read(path):
+    return load_state(
+        path,
+        expected_format=AGENT_STATE_FORMAT,
+        supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
+    )
 
 
 @pytest.fixture
 def saved_state(tmp_path):
-    path = tmp_path / "sandbox.agent.pkl"
+    path = tmp_path / "sandbox.agent.nowa"
     state = {"fallback": True, "experiences": ["synthetic-observation"]}
-    path.write_bytes(pickle.dumps(state))
+    _write(path, state)
     return path, path.read_bytes()
 
 
@@ -35,32 +60,35 @@ def _metadata(path):
 
 
 def test_extension_is_serialized_before_the_live_file_is_replaced(saved_state, monkeypatch):
+    import state_codec
+
     path, original = saved_state
-    dump = pickle.dump
+    real_replace = state_codec.os.replace
     calls = []
 
-    def observed_dump(state, stream):
-        assert path.read_bytes() == original
-        assert stream.name != str(path)
-        calls.append(stream.name)
-        return dump(state, stream)
+    def observed_replace(src, dst):
+        assert Path(dst).read_bytes() == original
+        assert os.path.abspath(src) != os.path.abspath(dst)
+        calls.append(src)
+        return real_replace(src, dst)
 
-    monkeypatch.setattr(checkpoint.pickle, "dump", observed_dump)
+    monkeypatch.setattr(state_codec.os, "replace", observed_replace)
     checkpoint._save_intent_memory_extension(_agent(), path)
 
     assert len(calls) == 1
-    assert pickle.loads(path.read_bytes())["sandbox_intent_memory"] == {"traces": []}
+    assert _read(path)["sandbox_intent_memory"] == {"traces": []}
     assert list(path.parent.iterdir()) == [path]
 
 
 def test_partial_serialization_failure_keeps_live_file_and_removes_temp(saved_state, monkeypatch):
+    import state_codec
+
     path, original = saved_state
 
-    def broken_dump(state, stream):
-        stream.write(b"partial checkpoint")
+    def broken_dumps(*args, **kwargs):
         raise OSError("synthetic serialization failure")
 
-    monkeypatch.setattr(checkpoint.pickle, "dump", broken_dump)
+    monkeypatch.setattr(state_codec.json, "dumps", broken_dumps)
     with pytest.raises(OSError, match="synthetic serialization failure"):
         checkpoint._save_intent_memory_extension(_agent(), path)
     assert path.read_bytes() == original
@@ -69,12 +97,14 @@ def test_partial_serialization_failure_keeps_live_file_and_removes_temp(saved_st
 
 @pytest.mark.parametrize("failure", ["replace", "fsync"])
 def test_publish_failure_preserves_live_file_and_cleans_temp(saved_state, monkeypatch, failure):
+    import state_codec
+
     path, original = saved_state
 
     def fail(*args):
         raise PermissionError("synthetic publish failure")
 
-    monkeypatch.setattr(checkpoint.os, failure, fail)
+    monkeypatch.setattr(state_codec.os, failure, fail)
     with pytest.raises(PermissionError, match="synthetic publish failure"):
         checkpoint._save_intent_memory_extension(_agent(), path)
     assert path.read_bytes() == original
@@ -106,9 +136,9 @@ def test_invalid_optional_extension_keeps_base_restore_and_existing_habits(
     saved_state, payload, caplog,
 ):
     path, _ = saved_state
-    state = pickle.loads(path.read_bytes())
+    state = _read(path)
     state["sandbox_intent_memory"] = payload
-    path.write_bytes(pickle.dumps(state))
+    _write(path, state)
     agent = _agent()
     previous = agent.intent_memory
 
@@ -120,22 +150,22 @@ def test_invalid_optional_extension_keeps_base_restore_and_existing_habits(
     assert "IntentMemory extension" in caplog.text
 
 
-@pytest.mark.parametrize("failure", [OSError, EOFError, pickle.UnpicklingError])
+@pytest.mark.parametrize("failure", [OSError, EOFError, StateFormatError])
 def test_optional_reread_failure_does_not_abort_base_restore(
     saved_state, monkeypatch, caplog, failure,
 ):
     path, _ = saved_state
-    load = pickle.load
+    real = checkpoint._agent_document
     calls = 0
 
-    def fail_second_read(stream):
+    def fail_second_read(agent_path):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise failure("synthetic extension read failure")
-        return load(stream)
+        return real(agent_path)
 
-    monkeypatch.setattr(checkpoint.pickle, "load", fail_second_read)
+    monkeypatch.setattr(checkpoint, "_agent_document", fail_second_read)
     agent = _agent()
     previous = agent.intent_memory
     with caplog.at_level(logging.WARNING, logger=checkpoint.__name__):
@@ -162,7 +192,7 @@ def test_missing_file_is_contained_by_optional_loader(tmp_path, caplog):
     agent = _agent()
     previous = agent.intent_memory
     with caplog.at_level(logging.WARNING, logger=checkpoint.__name__):
-        checkpoint._load_intent_memory_extension(agent, tmp_path / "missing.pkl")
+        checkpoint._load_intent_memory_extension(agent, tmp_path / "missing.nowa")
     assert agent.intent_memory is previous
     assert agent.sleep_manager.intent_memory is previous
     assert "IntentMemory extension" in caplog.text
@@ -171,9 +201,9 @@ def test_missing_file_is_contained_by_optional_loader(tmp_path, caplog):
 @pytest.mark.parametrize("traces", [[], {}])
 def test_valid_empty_list_or_legacy_mapping_restores_both_references(saved_state, traces):
     path, _ = saved_state
-    state = pickle.loads(path.read_bytes())
+    state = _read(path)
     state["sandbox_intent_memory"] = {"traces": traces}
-    path.write_bytes(pickle.dumps(state))
+    _write(path, state)
     agent = _agent()
     previous = agent.intent_memory
     assert checkpoint.restore_agent(_metadata(path), agent) is True
@@ -186,9 +216,9 @@ def test_valid_empty_list_or_legacy_mapping_restores_both_references(saved_state
 def test_valid_trace_identity_restores_list_and_legacy_mapping(saved_state, mapping):
     path, _ = saved_state
     row = {"intent_type": "wait", "context_signature": "synthetic-context"}
-    state = pickle.loads(path.read_bytes())
+    state = _read(path)
     state["sandbox_intent_memory"] = {"traces": {"legacy-key": row} if mapping else [row]}
-    path.write_bytes(pickle.dumps(state))
+    _write(path, state)
     agent = _agent()
     assert checkpoint.restore_agent(_metadata(path), agent) is True
     assert agent.sleep_manager.intent_memory is agent.intent_memory
@@ -200,9 +230,9 @@ def test_valid_trace_identity_restores_list_and_legacy_mapping(saved_state, mapp
 
 def test_failed_manager_assignment_rolls_back_agent_reference(saved_state, caplog):
     path, _ = saved_state
-    state = pickle.loads(path.read_bytes())
+    state = _read(path)
     state["sandbox_intent_memory"] = {"traces": []}
-    path.write_bytes(pickle.dumps(state))
+    _write(path, state)
     agent = _agent()
     previous = agent.intent_memory
 

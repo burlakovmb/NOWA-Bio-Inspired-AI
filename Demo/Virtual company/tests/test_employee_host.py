@@ -500,7 +500,7 @@ class TestEmployeeController:
         host = EmployeeHostController(roles_root=tmp_path)
         host.create_employee("Buyer", "buyer_del", ["clerk"])
         folder = host.employees_root / "buyer_del"
-        (folder / "mind.pkl").write_bytes(b"x")
+        (folder / "mind.nowa").write_bytes(b"x")
         assert folder.is_dir()
         host.delete_employee("buyer_del")
         assert folder.exists() is False

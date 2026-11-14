@@ -314,7 +314,7 @@ def test_save_load_restores_labile_clock_and_config(tmp_path):
 
     legacy = _build_agent(("go",), seed=1)
     legacy.step(["old"], reward=1.0, terminal=True, dt=0.0)
-    # A save that predates the labile section loads as an empty layer.
+    # Optional labile fields may be absent. Their absence leaves the live layer.
     bare = storage.save_agent(
         legacy.hippocampus,
         legacy.cortex,
@@ -322,16 +322,14 @@ def test_save_load_restores_labile_clock_and_config(tmp_path):
         agent=legacy,
         filename="legacy.pkl",
     )
-    import pickle
+    from storage import read_agent_state, write_agent_state
 
-    with open(bare, "rb") as handle:
-        payload = pickle.load(handle)
+    payload = read_agent_state(bare)
     payload.pop("labile_layer", None)
     payload.pop("plasticity_config", None)
     payload.pop("host_clock_s", None)
     stripped = tmp_path / "stripped.pkl"
-    with open(stripped, "wb") as handle:
-        pickle.dump(payload, handle)
+    write_agent_state(stripped, payload)
     empty = _build_agent(("go",), seed=1, wake_s=1000.0)
     storage.load_agent(
         empty.hippocampus,
@@ -346,16 +344,13 @@ def test_save_load_restores_labile_clock_and_config(tmp_path):
 def test_load_rebinds_sleep_manager_and_consolidates_restored_labile(tmp_path):
     """A loaded labile layer is the one sleep consolidates.
 
-    ``load_agent`` replaces ``agent.labile`` and ``agent.plasticity``. The
-    manager must see those objects, including when the caller passes
-    ``sleep_manager`` and when a legacy file has no ``labile_layer``.
-    One undecayed +1 moves Go 0.50 -> 0.58 only if the restored tag is
-    captured; the legacy empty layer leaves the sleep-rate step alone
-    (0.50 -> 0.57).
+    ``load_agent`` replaces ``agent.labile`` and ``agent.plasticity`` when
+    the file has them. The manager must see those objects. A file that
+    omits ``labile_layer`` keeps the live layer. One undecayed +1 moves
+    Go 0.50 -> 0.58 only if the restored tag is captured; a fresh layer
+    with no tags leaves the sleep-rate step alone (0.50 -> 0.57).
     """
-    import pickle
-
-    from storage import AgentStorage
+    from storage import AgentStorage, read_agent_state, write_agent_state
 
     agent = _build_agent(("go",), seed=1, wake_s=1000.0)
     agent.sleep_manager.decay_rate_sleep = 0.0
@@ -411,13 +406,11 @@ def test_load_rebinds_sleep_manager_and_consolidates_restored_labile(tmp_path):
     assert restored.sleep_manager.plasticity is restored.plasticity
     assert _stable_q(restored, ["bin"], "go") > 0.0
 
-    with open(path, "rb") as handle:
-        payload = pickle.load(handle)
+    payload = read_agent_state(path)
     assert isinstance(payload.get("labile_layer"), dict)
     payload.pop("labile_layer", None)
     stripped = tmp_path / "no-labile-layer.pkl"
-    with open(stripped, "wb") as handle:
-        pickle.dump(payload, handle)
+    write_agent_state(stripped, payload)
 
     legacy = _build_agent(("go",), seed=3, wake_s=50.0)
     legacy.sleep_manager.decay_rate_sleep = 0.0
@@ -430,7 +423,7 @@ def test_load_rebinds_sleep_manager_and_consolidates_restored_labile(tmp_path):
         value_layer=legacy.value_layer,
         agent=legacy,
     )
-    assert legacy.labile is not previous_labile
+    assert legacy.labile is previous_labile
     assert legacy.labile._contributions == {}
     assert labile_snapshot(legacy)["q"] == []
     assert legacy.sleep_manager.labile is legacy.labile

@@ -201,7 +201,7 @@ def test_tagged_and_legacy_trajectory_metadata_survive_checkpoint_roundtrip(tmp_
     tagged = store_lesson(source, ["synthetic:new"], WAIT, 0.5)
     counters = (source._trajectory_id, source._trajectory_seq, source._trajectory_step, source._trajectory_closed)
 
-    checkpoint = tmp_path / "synthetic-mind.pkl"
+    checkpoint = tmp_path / "synthetic-mind.nowa"
     save_mind(source, checkpoint)
     restored = _agent("trajectory-persistence")
     load_mind(restored, checkpoint)

@@ -87,25 +87,40 @@ class TestPersistence:
         assert resumed.intent_memory.to_dict() == saved_intents
         assert resumed.sleep_manager.intent_memory is resumed.intent_memory
 
-    def test_old_checkpoint_without_intent_extension_keeps_fresh_memory(
+    def test_state_without_intent_keys_keeps_fresh_memory(
         self, sandbox_agent, tmp_path
     ):
-        import pickle
+        from state_codec import (
+            AGENT_STATE_FORMAT,
+            AGENT_STATE_SCHEMA_VERSION,
+            dump_state,
+            load_state,
+        )
 
         path = save_checkpoint(
             tmp_path / "legacy.pkl", sandbox_agent, SandboxTrainingResult()
         )
         checkpoint = load_checkpoint(path)
-        with open(checkpoint.agent_state_path, "rb") as handle:
-            state = pickle.load(handle)
+        state = load_state(
+            checkpoint.agent_state_path,
+            expected_format=AGENT_STATE_FORMAT,
+            supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
+        )
         state.pop("sandbox_intent_memory", None)
-        with open(checkpoint.agent_state_path, "wb") as handle:
-            pickle.dump(state, handle)
+        state.pop("intent_memory", None)
+        dump_state(
+            checkpoint.agent_state_path,
+            state,
+            format_id=AGENT_STATE_FORMAT,
+            schema_version=AGENT_STATE_SCHEMA_VERSION,
+        )
 
         resumed = create_procurement_agent("legacy-resume", rng=random.Random(29))
         original_memory = resumed.intent_memory
+        original_traces = original_memory.to_dict()
         assert restore_agent(checkpoint, resumed) is True
         assert resumed.intent_memory is original_memory
+        assert resumed.intent_memory.to_dict() == original_traces
 
     def test_checkpoint_roundtrip_preserves_hippocampus_size(
         self, sandbox_agent, tmp_path
@@ -217,7 +232,19 @@ class TestCheckpointFailureModes:
 
         path = tmp_path / "foreign.pkl"
         path.write_bytes(pickle.dumps({"not": "a checkpoint"}))
-        with pytest.raises(CheckpointError):
+        with pytest.raises(CheckpointError, match="pickle"):
+            load_checkpoint(path)
+
+    def test_unknown_checkpoint_schema_is_rejected(self, tmp_path):
+        import json
+
+        path = tmp_path / "future.ckpt"
+        path.write_text(json.dumps({
+            "format": "nowa-sandbox-checkpoint",
+            "schema_version": 99,
+            "state": {},
+        }), encoding="utf-8")
+        with pytest.raises(CheckpointError, match="schema version"):
             load_checkpoint(path)
 
     def test_restore_without_agent_file_returns_false(self, sandbox_agent, tmp_path):
@@ -225,7 +252,7 @@ class TestCheckpointFailureModes:
             tmp_path / "ckpt.pkl", sandbox_agent, SandboxTrainingResult()
         )
         checkpoint = load_checkpoint(path)
-        checkpoint.agent_state_path = str(tmp_path / "missing.agent.pkl")
+        checkpoint.agent_state_path = str(tmp_path / "missing.agent.nowa")
         assert restore_agent(checkpoint, sandbox_agent) is False
 
     def test_restore_with_no_recorded_path_returns_false(self, sandbox_agent):

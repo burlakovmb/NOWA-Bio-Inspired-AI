@@ -6,7 +6,6 @@ gap, a full eviction sort, and one impulse per recalled episode.
 """
 
 import math
-import pickle
 import random
 
 import pytest
@@ -310,7 +309,9 @@ def test_slotted_episode_and_trace_roundtrip_without_changing_recall(monkeypatch
     hip.store(_path("ctx:nest", "action:go"), intensity=0.7, reward=0.3)
     original = hip.experiences[0]
     original.emotional_trace = AffectiveSpace().create_trace(intensity=0.6)
-    restored = pickle.loads(pickle.dumps(original))
+    from state_codec import decode_tree, encode_tree
+
+    restored = decode_tree(encode_tree(original))
     assert restored.path.signature() == original.path.signature()
     assert restored.reward == original.reward
     assert restored.activation_energy == original.activation_energy

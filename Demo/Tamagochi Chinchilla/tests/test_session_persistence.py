@@ -13,7 +13,7 @@ def test_session_persists_runtime_counters():
     from main import ChinchillaAgent
 
     demo_dir = Path(__file__).parent.parent
-    save_name = f"agent_save_test_{uuid.uuid4().hex[:8]}.pkl"
+    save_name = f"agent_save_test_{uuid.uuid4().hex[:8]}.nowa"
     save_path = demo_dir / "saves" / save_name
 
     # Create and save

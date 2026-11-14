@@ -116,10 +116,10 @@ def train(employee_dir: Path, role_path: Path, corpus_path: Path, *, seed: int =
     save_employee_config(config, employee_dir.parent, create_backup=False)
     seeded = build_seeder(role).seed_agent(agent)
     agent.sleep(cycles=3)
-    save_mind(agent, training / "baseline.pkl")
+    save_mind(agent, training / "baseline.nowa")
     before = stable_fingerprint(agent)
     journal(log, {"event": "baseline", "seed_episodes": seeded, "fingerprint": before,
-                  "checkpoint_sha256": digest(training / "baseline.pkl")})
+                  "checkpoint_sha256": digest(training / "baseline.nowa")})
     stored = []
     for lesson in lessons:
         episode = runtime.teach(lesson["context_tokens"], lesson["action"], lesson["reward"], lesson["consequence"])
@@ -130,15 +130,15 @@ def train(employee_dir: Path, role_path: Path, corpus_path: Path, *, seed: int =
     awake = stable_fingerprint(agent)
     if awake != before:
         raise RuntimeError("a lesson changed the stable tier while awake")
-    save_mind(agent, training / "awake.pkl")
+    save_mind(agent, training / "awake.nowa")
     sleep_result = agent.sleep(cycles=3)
     after = stable_fingerprint(agent)
     consolidated = sum(bool(getattr(e, "consolidated", False)) for e in stored)
-    checkpoint = employee_dir / "mind.pkl"
+    checkpoint = employee_dir / "mind.nowa"
     save_mind(agent, checkpoint)
     checkpoints = training / "checkpoints"
     checkpoints.mkdir()
-    shutil.copyfile(checkpoint, checkpoints / "cycle-001.pkl")
+    shutil.copyfile(checkpoint, checkpoints / "cycle-001.nowa")
     result = {"agent_id": agent_id, "created_at_utc": datetime.now(timezone.utc).isoformat(),
               "seed": seed, "role_path": str(role_path.resolve()), "role_sha256": digest(role_path),
               "corpus_sha256": digest(frozen), "seed_episodes": seeded, "lessons": len(lessons),
@@ -160,14 +160,14 @@ def evaluate(employee_dir: Path, probes_path: Path) -> dict:
     role = Path(report["role_path"])
     if digest(role) != report["role_sha256"]:
         raise ValueError("role changed since this training cycle")
-    mind = employee_dir / "mind.pkl"
+    mind = employee_dir / "mind.nowa"
     if digest(mind) != report["checkpoint_sha256"]:
         raise ValueError("mind changed since this training cycle")
     probes = read_json(probes_path)["probes"]
     rows = []
     fingerprints = []
     mismatched_components = set()
-    for stage, path, elapsed, age in [("baseline", employee_dir / "training/baseline.pkl", 0, 0),
+    for stage, path, elapsed, age in [("baseline", employee_dir / "training/baseline.nowa", 0, 0),
                                      ("reloaded", mind, 0, 0), ("host_time_24h", mind, 86400, 0),
                                      ("memory_age_24h", mind, 86400, 86400),
                                      ("memory_age_7d", mind, 604800, 604800)]:
@@ -213,12 +213,12 @@ def practice(employee_dir: Path, cycles: int = 3) -> dict:
     if report.get("active_phase") not in (None, "initial"):
         raise ValueError("practice requires the active phase corpus; use its audited training runner")
     role_path = Path(report["role_path"])
-    if digest(role_path) != report["role_sha256"] or digest(employee_dir / "mind.pkl") != report["checkpoint_sha256"]:
+    if digest(role_path) != report["role_sha256"] or digest(employee_dir / "mind.nowa") != report["checkpoint_sha256"]:
         raise ValueError("role or checkpoint changed outside this training run")
     if digest(training / "corpus.json") != report["corpus_sha256"]:
         raise ValueError("frozen lesson corpus changed")
     agent, runtime, _ = make_runtime(role_path, report["agent_id"], report["seed"])
-    load_mind(agent, employee_dir / "mind.pkl")
+    load_mind(agent, employee_dir / "mind.nowa")
     lessons = validate_lessons(read_json(training / "corpus.json"), set(agent.selector.actions))
     completed = int(report.get("completed_cycles", 1))
     if (training / "evaluation-result.json").exists():
@@ -238,16 +238,16 @@ def practice(employee_dir: Path, cycles: int = 3) -> dict:
         if stable_fingerprint(agent) != before:
             raise RuntimeError("practice changed stable memory while awake")
         sleep_result = agent.sleep(cycles=3)
-        checkpoint = training / "checkpoints" / f"cycle-{cycle:03}.pkl"
+        checkpoint = training / "checkpoints" / f"cycle-{cycle:03}.nowa"
         if checkpoint.exists():
             raise FileExistsError("cycle checkpoint already exists")
-        save_mind(agent, employee_dir / "mind.pkl")
-        shutil.copyfile(employee_dir / "mind.pkl", checkpoint)
+        save_mind(agent, employee_dir / "mind.nowa")
+        shutil.copyfile(employee_dir / "mind.nowa", checkpoint)
         report.update(completed_cycles=cycle, distinct_lessons=len(lessons),
                       lessons=report["lessons"] + len(lessons),
                       consolidated_lessons=report["consolidated_lessons"] + sum(bool(getattr(e, "consolidated", False)) for e in stored),
                       stable_after=stable_fingerprint(agent), stable_components=component_hashes(agent),
-                      checkpoint_sha256=digest(employee_dir / "mind.pkl"), sleep_result=sleep_result,
+                      checkpoint_sha256=digest(employee_dir / "mind.nowa"), sleep_result=sleep_result,
                       episode_count=len(agent.hippocampus.experiences), cortex_patterns=len(agent.cortex.patterns))
         journal(training / "lessons.jsonl", {"event": "checkpoint", "cycle": cycle,
                 "sha256": report["checkpoint_sha256"], "stable_fingerprint": report["stable_after"]})

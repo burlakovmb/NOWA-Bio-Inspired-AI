@@ -1,8 +1,33 @@
 import json
 import os
 from datetime import datetime
-import pickle
+
 from affect import AffectiveState
+from state_codec import (
+    AGENT_STATE_FORMAT,
+    AGENT_STATE_SCHEMA_VERSION,
+    dump_state,
+    load_state,
+)
+
+
+def read_agent_state(path):
+    """Return the saved agent mapping. Rejects pickle and unknown schemas."""
+    return load_state(
+        path,
+        expected_format=AGENT_STATE_FORMAT,
+        supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
+    )
+
+
+def write_agent_state(path, state) -> None:
+    """Write an agent mapping in the current safe schema."""
+    dump_state(
+        path,
+        state,
+        format_id=AGENT_STATE_FORMAT,
+        schema_version=AGENT_STATE_SCHEMA_VERSION,
+    )
 
 
 def _bind_restored_two_tier(agent, sleep_manager) -> None:
@@ -44,18 +69,20 @@ class AgentStorage:
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
     
-    def save_agent(self, hippocampus, cortex, selector, affect_state=None, temporal=None, sleep_manager=None, neuromodulators=None, affective_persistence=None, affective_background=None, affective_space=None, semantic_emotions=None, emotional_memory=None, emotional_expectations=None, emotional_regulation=None, emotional_stability=None, value_layer=None, filename=None, agent=None, conflict_arbitration=None):
+    def save_agent(self, hippocampus, cortex, selector, affect_state=None, temporal=None, sleep_manager=None, neuromodulators=None, affective_persistence=None, affective_background=None, affective_space=None, semantic_emotions=None, emotional_memory=None, emotional_expectations=None, emotional_regulation=None, emotional_stability=None, value_layer=None, filename=None, agent=None, conflict_arbitration=None, intent_memory=None):
         """Сохранить состояние агента в файл"""
         if filename is None:
-            filename = f"agent_save_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+            filename = f"agent_save_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nowa"
         if value_layer is None and agent is not None and hasattr(agent, "value_layer"):
             value_layer = getattr(agent, "value_layer", None)
         if conflict_arbitration is None and agent is not None and hasattr(agent, "conflict_arbitration"):
             conflict_arbitration = getattr(agent, "conflict_arbitration", None)
+        if intent_memory is None and agent is not None and hasattr(agent, "intent_memory"):
+            intent_memory = getattr(agent, "intent_memory", None)
         
         filepath = os.path.join(self.save_dir, filename)
         
-        # Сохранить все данные через pickle
+        # Сохранить состояние в JSON с версией схемы.
         agent_state = {
             "hippocampus_experiences": hippocampus.experiences,
             "hippocampus_episode_seq": int(getattr(hippocampus, "_episode_seq", 0)),
@@ -65,6 +92,9 @@ class AgentStorage:
             "selector_action_metadata": dict(getattr(selector, "action_metadata", {}) or {}),
             "timestamp": datetime.now().isoformat()
         }
+        export_decision = getattr(hippocampus, "export_persistent_state", None)
+        if callable(export_decision):
+            agent_state["hippocampus_decision"] = export_decision()
         
         # Сохранить аффективное состояние если оно есть (полная сериализация)
         if affect_state is not None:
@@ -411,22 +441,42 @@ class AgentStorage:
             except Exception:
                 pass
         
-        with open(filepath, 'wb') as f:
-            pickle.dump(agent_state, f)
+        if intent_memory is not None and callable(getattr(intent_memory, "to_dict", None)):
+            agent_state["intent_memory"] = intent_memory.to_dict()
+
+        dump_state(
+            filepath,
+            agent_state,
+            format_id=AGENT_STATE_FORMAT,
+            schema_version=AGENT_STATE_SCHEMA_VERSION,
+        )
         
         return filepath
     
-    def load_agent(self, hippocampus, cortex, selector, filepath, affect_state=None, temporal=None, sleep_manager=None, neuromodulators=None, affective_persistence=None, affective_background=None, affective_space=None, semantic_emotions=None, emotional_memory=None, emotional_expectations=None, emotional_regulation=None, emotional_stability=None, value_layer=None, agent=None, conflict_arbitration=None):
+    def load_agent(self, hippocampus, cortex, selector, filepath, affect_state=None, temporal=None, sleep_manager=None, neuromodulators=None, affective_persistence=None, affective_background=None, affective_space=None, semantic_emotions=None, emotional_memory=None, emotional_expectations=None, emotional_regulation=None, emotional_stability=None, value_layer=None, agent=None, conflict_arbitration=None, intent_memory=None):
         """Загрузить состояние агента из файла"""
-        with open(filepath, 'rb') as f:
-            agent_state = pickle.load(f)
+        agent_state = load_state(
+            filepath,
+            expected_format=AGENT_STATE_FORMAT,
+            supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
+        )
         if value_layer is None and agent is not None and hasattr(agent, "value_layer"):
             value_layer = getattr(agent, "value_layer", None)
         if conflict_arbitration is None and agent is not None and hasattr(agent, "conflict_arbitration"):
             conflict_arbitration = getattr(agent, "conflict_arbitration", None)
+        if intent_memory is None and agent is not None and hasattr(agent, "intent_memory"):
+            intent_memory = getattr(agent, "intent_memory", None)
         
         # Восстановить данные
         hippocampus.experiences = agent_state["hippocampus_experiences"]
+        decision = agent_state.get("hippocampus_decision")
+        import_decision = getattr(hippocampus, "import_persistent_state", None)
+        if isinstance(decision, dict) and callable(import_decision):
+            import_decision(decision)
+        elif hasattr(hippocampus, "signatures"):
+            hippocampus.signatures = []
+            if hasattr(hippocampus, "_nov_valid"):
+                hippocampus._nov_valid = False
         if hasattr(hippocampus, "_sync_episode_index"):
             try:
                 hippocampus._sync_episode_index()
@@ -901,6 +951,23 @@ class AgentStorage:
             except Exception:
                 pass
 
+        if isinstance(agent_state.get("intent_memory"), dict) and intent_memory is not None:
+            try:
+                from learning_guard import initializing
+
+                restored_memory = type(intent_memory).from_dict(agent_state.get("intent_memory"))
+                with initializing():
+                    intent_memory.traces = restored_memory.traces
+                    intent_memory.context_signature_window = restored_memory.context_signature_window
+                    intent_memory.recency_half_life = restored_memory.recency_half_life
+                    intent_memory.min_strength_for_trace = restored_memory.min_strength_for_trace
+                    if agent is not None:
+                        agent.intent_memory = intent_memory
+                    if sleep_manager is not None:
+                        sleep_manager.intent_memory = intent_memory
+            except Exception:
+                pass
+
         # Restore emotional stability monitoring (Phase 4.5) if provided
         if emotional_stability is not None and "emotional_stability" in agent_state:
             try:
@@ -1070,17 +1137,15 @@ class AgentStorage:
             try:
                 from labile_layer import LabileLayer, PlasticityConfig
 
-                if isinstance(agent_state.get("plasticity_config"), dict):
+                loaded_plasticity = isinstance(agent_state.get("plasticity_config"), dict)
+                loaded_labile = isinstance(agent_state.get("labile_layer"), dict)
+                if loaded_plasticity:
                     agent.plasticity = PlasticityConfig.from_dict(agent_state.get("plasticity_config"))
-                if isinstance(agent_state.get("labile_layer"), dict):
+                if loaded_labile:
                     agent.labile = LabileLayer.from_dict(agent_state.get("labile_layer"))
+                if (loaded_plasticity or loaded_labile) and getattr(agent, "labile", None) is not None:
                     if getattr(agent, "plasticity", None) is not None:
                         agent.labile.config = agent.plasticity
-                elif not isinstance(agent_state.get("labile_layer"), dict):
-                    # Saves written before the labile tier load as an empty layer.
-                    config = getattr(agent, "plasticity", None) or PlasticityConfig()
-                    agent.plasticity = config
-                    agent.labile = LabileLayer(config)
                 if "host_clock_s" in agent_state:
                     agent._host_clock_s = float(agent_state.get("host_clock_s", 0.0))
                 raw_slots = agent_state.get("bg_outcome_slots")
@@ -1208,7 +1273,7 @@ class AgentStorage:
         
         files = []
         for f in os.listdir(self.save_dir):
-            if f.endswith('.pkl'):
+            if f.endswith('.nowa') or f.endswith('.pkl'):
                 filepath = os.path.join(self.save_dir, f)
                 files.append({
                     'name': f,

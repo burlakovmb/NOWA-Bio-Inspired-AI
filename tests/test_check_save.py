@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Manual diagnostic for the newest pickle in saves/.
+"""Manual diagnostic for the newest agent save in saves/.
 
 This is not part of the pytest suite. Running it as a script inspects the
 latest save. Importing the module (as pytest does at collection) does nothing.
 """
 
 import os
-import pickle
 import sys
 from pathlib import Path
 
@@ -17,7 +16,11 @@ def main() -> int:
         print("No saves directory!")
         return 1
 
-    files = sorted(saves_dir.glob("*.pkl"), key=os.path.getmtime, reverse=True)
+    files = sorted(
+        list(saves_dir.glob("*.nowa")) + list(saves_dir.glob("*.pkl")),
+        key=os.path.getmtime,
+        reverse=True,
+    )
     if not files:
         print("No save files!")
         return 1
@@ -27,8 +30,12 @@ def main() -> int:
     print(f"Size: {latest.stat().st_size} bytes")
     print()
 
-    with open(latest, "rb") as handle:
-        data = pickle.load(handle)
+    src = Path(__file__).resolve().parents[1] / "src"
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    from storage import read_agent_state
+
+    data = read_agent_state(latest)
 
     print("Keys in saved data:")
     for key in data.keys():
