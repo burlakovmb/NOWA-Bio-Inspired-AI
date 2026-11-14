@@ -777,6 +777,9 @@ class AgentStorage:
                     restored = type(affective_space).from_dict(as_data)
                     affective_space.axes = dict(restored.axes)
                     affective_space.baseline = dict(getattr(restored, "baseline", {}))
+                    affective_space.baseline_setpoint = dict(
+                        getattr(restored, "baseline_setpoint", affective_space.baseline)
+                    )
                     affective_space.alpha = float(getattr(restored, "alpha", getattr(affective_space, "alpha", 0.85)))
                     axis_decay_source = getattr(restored, "axis_decay", getattr(restored, "affective_decay", {}))
                     if hasattr(affective_space, "_fill_axis_decay"):
@@ -793,7 +796,7 @@ class AgentStorage:
                         getattr(restored, "lambda_reg", getattr(affective_space, "lambda_reg", 0.05))
                     )
                     affective_space.baseline_adapt_rate = float(
-                        getattr(restored, "baseline_adapt_rate", getattr(affective_space, "baseline_adapt_rate", 0.002))
+                        getattr(restored, "baseline_adapt_rate", getattr(affective_space, "baseline_adapt_rate", 1.0 / (6.0 * 3600.0)))
                     )
                     affective_space.norm_cap_base = float(
                         getattr(restored, "norm_cap_base", getattr(affective_space, "norm_cap_base", 1.5))

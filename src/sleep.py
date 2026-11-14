@@ -120,6 +120,30 @@ class CortexMemory:
         }
 
 
+# One consolidation cycle is 30 minutes of simulated sleep (see Agent.sleep).
+SECONDS_PER_SLEEP_CYCLE = 30.0 * 60.0
+
+
+def _per_cycle_sleep_seconds(cycles: int, sleep_duration_seconds: Optional[float]) -> float:
+    """Seconds of affective time for one cycle, summing to the real sleep."""
+    try:
+        count = int(cycles)
+    except (TypeError, ValueError):
+        count = 0
+    if count <= 0:
+        return 0.0
+    if sleep_duration_seconds is None:
+        total = float(count) * SECONDS_PER_SLEEP_CYCLE
+    else:
+        try:
+            total = float(sleep_duration_seconds)
+        except (TypeError, ValueError):
+            return 0.0
+        if total != total or total < 0.0 or total == float("inf"):
+            return 0.0
+    return total / float(count)
+
+
 class SleepManager:
     """
     Sleep consolidation — the only writer of the stable tier.
@@ -669,8 +693,9 @@ class SleepManager:
                             "source": "internal",
                         }
                     ],
-                    time_elapsed=8.0,
+                    time_elapsed=self._affective_cycle_dt(),
                     wakefulness=0.0,
+                    asleep=True,
                     background=background,
                 )
         except Exception:
@@ -3046,13 +3071,34 @@ class SleepManager:
         self._two_tier_marked = marked
         return marked
 
-    def deep_sleep(self, cycles: int = 3) -> dict:
+    def _affective_cycle_dt(self) -> float:
+        """Simulated seconds for this cycle's affective advance.
+
+        ``deep_sleep`` stores the per-cycle slice on ``_affective_sleep_dt``
+        so the cycles sum to the real sleep. A direct ``sleep_cycle`` is
+        one 30-minute cycle.
+        """
+        raw = getattr(self, "_affective_sleep_dt", None)
+        if raw is None:
+            return SECONDS_PER_SLEEP_CYCLE
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+        if seconds != seconds or seconds < 0.0 or seconds == float("inf"):
+            return 0.0
+        return seconds
+
+    def deep_sleep(self, cycles: int = 3, sleep_duration_seconds: float = None) -> dict:
         """
         Extended sleep with multiple consolidation cycles.
-        
+
         Args:
             cycles: Number of sleep cycles to run
-        
+            sleep_duration_seconds: Simulated sleep spread across the cycles.
+                Affective time advances by this total, once. None uses
+                ``cycles * SECONDS_PER_SLEEP_CYCLE`` (30 min each).
+
         Returns:
             Aggregated statistics
         """
@@ -3135,85 +3181,89 @@ class SleepManager:
         with learning_allowed():
             self._consolidate_two_tier_once()
 
-        for _ in range(cycles):
-            stats = self.sleep_cycle()
-            total_stats["total_candidates"] += stats["candidates"]
-            total_stats["total_clusters"] += stats["clusters"]
-            total_stats["total_patterns"] += stats["patterns_consolidated"]
-            total_stats["total_forgotten"] += stats["experiences_forgotten"]
-            total_stats["total_replays"] += stats["replays"]
-            total_stats["total_replay_selected"] += int(stats.get("replay_selected", 0))
-            total_stats["total_replay_blocked"] += int(bool(stats.get("replay_blocked", False)))
-            total_stats["total_shock_replays"] += int(stats.get("shock_replays", 0))
-            total_stats["mean_replay_diversity_index"] += float(stats.get("replay_diversity_index", 0.0))
-            total_stats["mean_replay_confidence"] += float(stats.get("replay_confidence_mean", 0.0))
-            total_stats["mean_replay_stability"] += float(stats.get("replay_stability_mean", 0.0))
-            total_stats["total_value_delta"] += float(stats.get("value_delta_total", 0.0))
-            total_stats["total_weight_delta"] += float(stats.get("weight_delta_total", 0.0))
-            total_stats["total_value_delta_sleep"] += float(
-                stats.get("total_value_delta_sleep", stats.get("value_delta_total", 0.0))
-            )
-            total_stats["total_bg_delta_sleep"] += float(
-                stats.get("total_bg_delta_sleep", stats.get("weight_delta_total", 0.0))
-            )
-            total_stats["sleep_update_count"] += int(stats.get("sleep_update_count", 0))
-            total_stats["decay_applied_cycles"] += int(bool(stats.get("decay_applied", False)))
-            total_stats["normalization_applied_cycles"] += int(bool(stats.get("normalization_applied", False)))
-            total_stats["mean_ach_during_cycle"] += float(stats.get("mean_ach_during_cycle", 0.0))
-            total_stats["mean_ach_above_baseline"] += float(stats.get("mean_ach_above_baseline", 0.0))
-            total_stats["value_variance_ratio"] += float(stats.get("value_variance_ratio", 0.0))
-            total_stats["variance_ratio"] += float(stats.get("variance_ratio", stats.get("value_variance_ratio", 0.0)))
-            total_stats["total_episodes_examined"] += int(stats.get("total_episodes_examined", 0))
-            total_stats["total_episodes_consolidated"] += int(stats.get("total_episodes_consolidated", 0))
-            total_stats["rejected_due_to_td_threshold"] += int(stats.get("rejected_due_to_td_threshold", 0))
-            total_stats["rejected_due_to_td_variance"] += int(stats.get("rejected_due_to_td_variance", 0))
-            total_stats["rejected_due_to_salience"] += int(stats.get("rejected_due_to_salience", 0))
-            total_stats["rejected_due_to_reinforcement"] += int(stats.get("rejected_due_to_reinforcement", 0))
-            total_stats["rejected_due_to_variance_gate"] += int(stats.get("rejected_due_to_variance_gate", 0))
-            total_stats["rejected_due_to_ach"] += int(stats.get("rejected_due_to_ach", 0))
-            total_stats["rejected_due_to_stability"] += int(stats.get("rejected_due_to_stability", 0))
-            total_stats["sleep_update_l2_total"] += float(stats.get("sleep_update_l2_total", 0.0))
-            total_stats["sac_episodes_gated"] += int(stats.get("sac_episodes_gated", 0))
-            total_stats["sac_actions_considered"] += int(stats.get("sac_actions_considered", 0))
-            total_stats["sac_actions_updated"] += int(stats.get("sac_actions_updated", 0))
-            total_stats["sac_actions_skipped"] += int(stats.get("sac_actions_skipped", 0))
-            total_stats["sac_rejected_confidence"] += int(stats.get("sac_rejected_confidence", 0))
-            total_stats["sac_rejected_stability"] += int(stats.get("sac_rejected_stability", 0))
-            total_stats["sac_rejected_shock"] += int(stats.get("sac_rejected_shock", 0))
-            total_stats["sac_rejected_consolidation_probability"] += int(
-                stats.get("sac_rejected_consolidation_probability", 0)
-            )
-            total_stats["sac_rejected_replay_count"] += int(stats.get("sac_rejected_replay_count", 0))
-            total_stats["sac_rejected_min_weight"] += int(stats.get("sac_rejected_min_weight", 0))
-            total_stats["sac_rejected_shock_mean"] += int(stats.get("sac_rejected_shock_mean", 0))
-            total_stats["sac_rejected_divergence"] += int(stats.get("sac_rejected_divergence", 0))
-            total_stats["sac_rejected_missing_signal"] += int(stats.get("sac_rejected_missing_signal", 0))
-            total_stats["semantic_drift_rate"] += float(stats.get("semantic_drift_rate", 0.0))
-            total_stats["stability_growth_rate"] += float(stats.get("stability_growth_rate", 0.0))
-            total_stats["divergence_reduction_index"] += float(stats.get("divergence_reduction_index", 0.0))
-            total_stats["overconfidence_index"] += float(stats.get("overconfidence_index", 0.0))
-            total_stats["sac_phase_sws"] += int(stats.get("sac_phase_sws", 0))
-            total_stats["sac_phase_rem"] += int(stats.get("sac_phase_rem", 0))
-            total_stats["sac_phase_transitional"] += int(stats.get("sac_phase_transitional", 0))
-            total_stats["mean_sigma_change"] += float(stats.get("mean_sigma_change", 0.0))
-            total_stats["mean_stability_change"] += float(stats.get("mean_stability_change", 0.0))
-            total_stats["structural_alert_count"] += int(stats.get("structural_alert_count", 0))
-            phase_distribution = stats.get("phase_distribution", {})
-            if isinstance(phase_distribution, dict):
-                for phase_name in ("SWS", "REM", "TRANSITIONAL"):
-                    total_stats["phase_distribution"][phase_name] += int(phase_distribution.get(phase_name, 0))
-            consolidated_in_cycle = int(stats.get("total_episodes_consolidated", 0))
-            consolidation_score_weighted_sum += float(stats.get("mean_consolidation_score", 0.0)) * float(
-                consolidated_in_cycle
-            )
-            total_stats["last_value_variance"] = float(stats.get("value_variance", 0.0))
-            total_stats["replay_blocked"] = bool(total_stats["replay_blocked"] or stats.get("replay_blocked", False))
+        self._affective_sleep_dt = _per_cycle_sleep_seconds(cycles, sleep_duration_seconds)
+        try:
+            for _ in range(cycles):
+                stats = self.sleep_cycle()
+                total_stats["total_candidates"] += stats["candidates"]
+                total_stats["total_clusters"] += stats["clusters"]
+                total_stats["total_patterns"] += stats["patterns_consolidated"]
+                total_stats["total_forgotten"] += stats["experiences_forgotten"]
+                total_stats["total_replays"] += stats["replays"]
+                total_stats["total_replay_selected"] += int(stats.get("replay_selected", 0))
+                total_stats["total_replay_blocked"] += int(bool(stats.get("replay_blocked", False)))
+                total_stats["total_shock_replays"] += int(stats.get("shock_replays", 0))
+                total_stats["mean_replay_diversity_index"] += float(stats.get("replay_diversity_index", 0.0))
+                total_stats["mean_replay_confidence"] += float(stats.get("replay_confidence_mean", 0.0))
+                total_stats["mean_replay_stability"] += float(stats.get("replay_stability_mean", 0.0))
+                total_stats["total_value_delta"] += float(stats.get("value_delta_total", 0.0))
+                total_stats["total_weight_delta"] += float(stats.get("weight_delta_total", 0.0))
+                total_stats["total_value_delta_sleep"] += float(
+                    stats.get("total_value_delta_sleep", stats.get("value_delta_total", 0.0))
+                )
+                total_stats["total_bg_delta_sleep"] += float(
+                    stats.get("total_bg_delta_sleep", stats.get("weight_delta_total", 0.0))
+                )
+                total_stats["sleep_update_count"] += int(stats.get("sleep_update_count", 0))
+                total_stats["decay_applied_cycles"] += int(bool(stats.get("decay_applied", False)))
+                total_stats["normalization_applied_cycles"] += int(bool(stats.get("normalization_applied", False)))
+                total_stats["mean_ach_during_cycle"] += float(stats.get("mean_ach_during_cycle", 0.0))
+                total_stats["mean_ach_above_baseline"] += float(stats.get("mean_ach_above_baseline", 0.0))
+                total_stats["value_variance_ratio"] += float(stats.get("value_variance_ratio", 0.0))
+                total_stats["variance_ratio"] += float(stats.get("variance_ratio", stats.get("value_variance_ratio", 0.0)))
+                total_stats["total_episodes_examined"] += int(stats.get("total_episodes_examined", 0))
+                total_stats["total_episodes_consolidated"] += int(stats.get("total_episodes_consolidated", 0))
+                total_stats["rejected_due_to_td_threshold"] += int(stats.get("rejected_due_to_td_threshold", 0))
+                total_stats["rejected_due_to_td_variance"] += int(stats.get("rejected_due_to_td_variance", 0))
+                total_stats["rejected_due_to_salience"] += int(stats.get("rejected_due_to_salience", 0))
+                total_stats["rejected_due_to_reinforcement"] += int(stats.get("rejected_due_to_reinforcement", 0))
+                total_stats["rejected_due_to_variance_gate"] += int(stats.get("rejected_due_to_variance_gate", 0))
+                total_stats["rejected_due_to_ach"] += int(stats.get("rejected_due_to_ach", 0))
+                total_stats["rejected_due_to_stability"] += int(stats.get("rejected_due_to_stability", 0))
+                total_stats["sleep_update_l2_total"] += float(stats.get("sleep_update_l2_total", 0.0))
+                total_stats["sac_episodes_gated"] += int(stats.get("sac_episodes_gated", 0))
+                total_stats["sac_actions_considered"] += int(stats.get("sac_actions_considered", 0))
+                total_stats["sac_actions_updated"] += int(stats.get("sac_actions_updated", 0))
+                total_stats["sac_actions_skipped"] += int(stats.get("sac_actions_skipped", 0))
+                total_stats["sac_rejected_confidence"] += int(stats.get("sac_rejected_confidence", 0))
+                total_stats["sac_rejected_stability"] += int(stats.get("sac_rejected_stability", 0))
+                total_stats["sac_rejected_shock"] += int(stats.get("sac_rejected_shock", 0))
+                total_stats["sac_rejected_consolidation_probability"] += int(
+                    stats.get("sac_rejected_consolidation_probability", 0)
+                )
+                total_stats["sac_rejected_replay_count"] += int(stats.get("sac_rejected_replay_count", 0))
+                total_stats["sac_rejected_min_weight"] += int(stats.get("sac_rejected_min_weight", 0))
+                total_stats["sac_rejected_shock_mean"] += int(stats.get("sac_rejected_shock_mean", 0))
+                total_stats["sac_rejected_divergence"] += int(stats.get("sac_rejected_divergence", 0))
+                total_stats["sac_rejected_missing_signal"] += int(stats.get("sac_rejected_missing_signal", 0))
+                total_stats["semantic_drift_rate"] += float(stats.get("semantic_drift_rate", 0.0))
+                total_stats["stability_growth_rate"] += float(stats.get("stability_growth_rate", 0.0))
+                total_stats["divergence_reduction_index"] += float(stats.get("divergence_reduction_index", 0.0))
+                total_stats["overconfidence_index"] += float(stats.get("overconfidence_index", 0.0))
+                total_stats["sac_phase_sws"] += int(stats.get("sac_phase_sws", 0))
+                total_stats["sac_phase_rem"] += int(stats.get("sac_phase_rem", 0))
+                total_stats["sac_phase_transitional"] += int(stats.get("sac_phase_transitional", 0))
+                total_stats["mean_sigma_change"] += float(stats.get("mean_sigma_change", 0.0))
+                total_stats["mean_stability_change"] += float(stats.get("mean_stability_change", 0.0))
+                total_stats["structural_alert_count"] += int(stats.get("structural_alert_count", 0))
+                phase_distribution = stats.get("phase_distribution", {})
+                if isinstance(phase_distribution, dict):
+                    for phase_name in ("SWS", "REM", "TRANSITIONAL"):
+                        total_stats["phase_distribution"][phase_name] += int(phase_distribution.get(phase_name, 0))
+                consolidated_in_cycle = int(stats.get("total_episodes_consolidated", 0))
+                consolidation_score_weighted_sum += float(stats.get("mean_consolidation_score", 0.0)) * float(
+                    consolidated_in_cycle
+                )
+                total_stats["last_value_variance"] = float(stats.get("value_variance", 0.0))
+                total_stats["replay_blocked"] = bool(total_stats["replay_blocked"] or stats.get("replay_blocked", False))
             
-            # Track intent memory stats from last cycle
-            if stats.get("intent_degraded"):
-                total_stats["intent_degraded"] = True
-            if stats.get("intent_stats"):
-                total_stats["intent_stats"] = stats["intent_stats"]
+                # Track intent memory stats from last cycle
+                if stats.get("intent_degraded"):
+                    total_stats["intent_degraded"] = True
+                if stats.get("intent_stats"):
+                    total_stats["intent_stats"] = stats["intent_stats"]
+        finally:
+            self._affective_sleep_dt = None
         
         # Note: individual sleep_cycle() calls already increment
         # `self.consolidation_cycles`, so do not increment again here.

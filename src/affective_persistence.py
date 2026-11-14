@@ -84,7 +84,7 @@ class AffectivePersistenceLayer:
             affect_state: AffectiveState-like object
             neuromodulators: NeuromodulatorState-like object (optional)
             temporal_levels: Dict from TemporalLevels.get_levels() (optional)
-            time_elapsed: Logical steps elapsed (not wall-clock seconds)
+            time_elapsed: Simulated seconds. The decay exponent is per second.
         """
         if affect_state is None:
             return
@@ -131,7 +131,12 @@ class AffectivePersistenceLayer:
         trace.intensity = self._clamp(trace.intensity + increment, 0.0, 1.0)
 
     def _decay_traces(self, time_elapsed: float = 1.0) -> None:
-        steps = max(1.0, float(time_elapsed or 1.0))
+        try:
+            steps = float(time_elapsed)
+        except (TypeError, ValueError):
+            steps = 1.0
+        if steps != steps or steps < 0.0 or steps == float("inf"):
+            steps = 0.0
         for trace in self._traces.values():
             decay_rate = self._clamp(trace.decay_rate, *self.decay_rate_range)
             decay_factor = (1.0 - decay_rate) ** steps

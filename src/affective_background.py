@@ -63,7 +63,7 @@ class AffectiveBackgroundField:
             traces: dict {trace_type: intensity}
             wakefulness: [0..1] affects noise only
             lifetime_progress: [0..1] affects dynamics only
-            time_elapsed: logical steps since last update
+            time_elapsed: Simulated seconds. Decay is ``(1 - rate) ** seconds``.
         """
         from learning_guard import guard_owned_writer
 
@@ -71,7 +71,12 @@ class AffectiveBackgroundField:
             return dict(self.background)
         wakefulness = _clamp(wakefulness, 0.0, 1.0)
         lifetime_progress = _clamp(lifetime_progress, 0.0, 1.0)
-        steps = max(1.0, float(time_elapsed or 1.0))
+        try:
+            steps = float(time_elapsed)
+        except (TypeError, ValueError):
+            steps = 1.0
+        if steps != steps or steps < 0.0 or steps == float("inf"):
+            steps = 0.0
 
         inertia = self.base_inertia * (1.0 + lifetime_progress * self.k_life)
         update_rate = 1.0 / (1.0 + max(0.0, inertia))
