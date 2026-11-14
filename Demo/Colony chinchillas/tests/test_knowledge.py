@@ -55,6 +55,12 @@ def test_tc05_position_knowledge_degrades_without_contact() -> None:
     a1.position = "house"
     a0._interpret_action = lambda action: None  # type: ignore[method-assign]
     a1._interpret_action = lambda action: None  # type: ignore[method-assign]
+    # Alarm is not contact: it writes the caller's position at any distance.
+    # One affect advance per host tick (no second decay inside decision_only)
+    # lets stress cross 0.7 in this window. Freeze the channel so the window
+    # stays "unseen", which is what the asserts measure.
+    a0._is_emitting_alarm = lambda: False  # type: ignore[method-assign]
+    a1._is_emitting_alarm = lambda: False  # type: ignore[method-assign]
 
     runner.run_for(120.0, dt=1.0)
 
