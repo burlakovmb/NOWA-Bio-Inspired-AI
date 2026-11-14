@@ -84,7 +84,7 @@ Behavioral updates:
 - Canonical source of truth remains `AffectiveSpace.axes`.
 - Legacy additive dynamics are opt-in: `legacy_compat_weight` (default `0.0`).
 - Dynamic norm cap gains anti-sticky release via `norm_cap_global_release_rate`.
-- Runtime baseline drift is supported via `baseline_adapt_rate`.
+- Runtime baseline allostasis uses `baseline_adapt_rate` per simulated second and fixed `baseline_setpoint` ([specs/issue-54-affect-simulated-time.en.md](specs/issue-54-affect-simulated-time.en.md)).
 - Save/load includes all new affective-space fields.
 
 Validation status:

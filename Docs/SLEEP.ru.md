@@ -23,6 +23,8 @@ English: [SLEEP.en.md](SLEEP.en.md)
 
 Затем `cycles` раз `sleep_cycle()` (replay TD только **стабильного Q**, кора, SHY, цепочки и т.д.). Потолки PR #35 сохраняются.
 
+Каждый `sleep_cycle` продвигает канонический аффект на один срез симулированного времени сна (`SleepManager._affective_cycle_dt()`): по умолчанию **1800 с** за цикл или равные доли `sleep_duration_seconds` в `deep_sleep`. Вызовы — `AffectiveSpace.step(..., asleep=True)`; клиренс оси и возврат `baseline` к `baseline_setpoint` в **4×** быстрее бодрствования (`SLEEP_RECOVERY_SCALE`). См. [specs/issue-54-affect-simulated-time.ru.md](specs/issue-54-affect-simulated-time.ru.md).
+
 После циклов — `consolidated = True`, `consolidated_reward`, `consolidated_revision`. Второй сон без новых эпизодов не меняет перечисленные поля отпечатка (кроме SHY при `cycles > 0`).
 
 `sleep(cycles=0)` — только двухуровневый проход и пометка, без `sleep_cycle`.

@@ -87,7 +87,7 @@ NOWA (Neuro-Optimized Waking Observer Agent) — биологически вдо
 │  ┌──────────────────────────────────────────────┐  │
 │  │  AFFECTIVE CORE (Phase 4)               │  │
 │  │  ├─ 8 canonical axes [-1..1]                │  │
-│  │  ├─ Dynamics: axis_decay/lambda + impulses + optional legacy compat │  │
+│  │  ├─ Dynamics: axis_decay/lambda**dt за секунду + impulses + optional legacy compat │  │
 │  │  ├─ Noise from wakefulness/uncertainty/conflict │  │
 │  │  └─ No direct action influence              │  │
 │  └──────────────────────────────────────────────┘  │
@@ -262,12 +262,12 @@ NOWA (Neuro-Optimized Waking Observer Agent) — биологически вдо
 
 1. Единый источник истины: `AffectiveSpace.axes`.
 2. Канонические оси ограничены по каждой оси в `[-1, 1]`.
-3. Каноническое обновление использует поосевой `axis_decay`, суммы импульсов и гомеостатическое возвращение через `lambda_reg`.
+3. Каноническое обновление интегрирует по симулированной секунде: удержание `clamp(axis_decay−lambda_reg,0,0.999)**dt`, импульсы в конце интервала (`AffectiveSpace.step` / `apply_impulses` / `advance`).
 4. Импульсы припоминания ограничены (предел на импульс и предел суммарной доли).
 5. Норма среды исполнения ограничена динамическим потолком (`dynamic_norm_cap`).
 6. `dynamic_norm_cap` включает управляемый рост и как условное, так и глобальное освобождение.
 7. Унаследованная аддитивная динамика включается по желанию через `legacy_compat_weight` (по умолчанию `0.0`).
-8. Базовая линия может медленно адаптироваться в ходе исполнения через `baseline_adapt_rate`.
+8. Baseline адаптируется за симулированную секунду через `baseline_adapt_rate`, с фиксированным `baseline_setpoint` (`b0`); сон — `asleep=True` и `SLEEP_RECOVERY_SCALE` ([specs/issue-54-affect-simulated-time.ru.md](specs/issue-54-affect-simulated-time.ru.md)).
 
 ### Канонические оси
 

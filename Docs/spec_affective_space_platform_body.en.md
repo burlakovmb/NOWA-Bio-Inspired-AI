@@ -213,7 +213,7 @@ The orchestrator of every W-call while awake is the `Agent` (and the body runtim
 |---|---|---|---|
 | Neuromodulators | `neuromodulators.py` | R/W | The two-way link runs **through the Agent**, not through a cyclic import: DA↔valence/curiosity, 5HT↔stability/trust, NE↔arousal/stress, ACh↔curiosity and the analogue of focus (dominance). Neuromodulators do not duplicate the axes. |
 | Wakefulness | `wakefulness.py` | R | It is already an argument of `step(wakefulness=)`. Process S does not come from A(t). High stress may accelerate `update_waking` (a coefficient, not a replacement of Process S). |
-| Sleep | `sleep.py` | R/W | During sleep: `time_elapsed` is larger, external impulses are approximately 0, and the background lowers the decay of arousal/stress differently (stabilisation). Replay may call `recall_trace`. Do not call MCP. |
+| Sleep | `sleep.py` | R/W | During sleep: `step(..., asleep=True, time_elapsed=<cycle dt>)` advances simulated sleep seconds per cycle (`SECONDS_PER_SLEEP_CYCLE` or `sleep_duration_seconds/cycles`), with `SLEEP_RECOVERY_SCALE` on clearance/recovery; external impulses are approximately 0. Replay may call `recall_trace`. Do not call MCP. See [specs/issue-54-affect-simulated-time.en.md](specs/issue-54-affect-simulated-time.en.md). |
 | Temporal / TemporalChains | `temporal.py`, `temporal_chains.py` | R | Log a snapshot of A(t) into T0/T1 (today this is partly `affect_state`). |
 
 ### 4.4 Evolution, population, organism
@@ -224,7 +224,7 @@ The orchestrator of every W-call while awake is the `Agent` (and the body runtim
 | Epigenome | `epigenome.py` | R | A snapshot may include the `baseline` of A(t) as a slow drift (optional, and without breaking the format in the absence of a migration). |
 | AgentFactory | `agent_factory.py` | R | It already applies the affective genes. Check that it does not write `affect_state` while bypassing the space. |
 | Fitness | `fitness.py` | R | The affective-stability component: a low `axis_conflict`, a moderate stress, and no sticking at `norm_cap_max`. |
-| Swarm | `swarm.py` | R/W | It already reads the axes in places — standardise on `snapshot()`. A social signal becomes an external impulse (attachment/trust), not a direct write. |
+| Swarm | `swarm.py` | R/W | It already reads the axes in places — standardise on `snapshot()`. A social signal becomes an external impulse (attachment/trust), not a direct write. Fallback `step(inputs=…)` without `time_elapsed` still advances **1.0** simulated second (see issue #54 spec). |
 | Ecology / Reproduction / Mortality | `ecology.py`, `reproduction.py`, `mortality.py` | R | Coupling of mortality and stress: a high sustained stress raises mortality pressure (if the layer can do that). Otherwise R without W. |
 | PopulationObserver | `population_observer.py` | I | Aggregate the mean axes over the population. |
 | AutonomousOrganism | `autonomous_organism.py` | R | Drives do not replace A(t). Energy and drives may emit internal impulses (arousal/stress under depletion). |
