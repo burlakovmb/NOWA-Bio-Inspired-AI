@@ -73,6 +73,8 @@ SHA-256 канонического JSON категории A: value layer, ви�
 
 `PlasticityConfig`, лабильный слой и часы сохраняются в save/load.
 
+На диске это поля документа JSON `nowa-agent-state` (схема `1`, расширение `.nowa`), не pickle. См. [issue-16-31-safe-agent-state.ru.md](../specs/issue-16-31-safe-agent-state.ru.md). Старые `.pkl` отвергаются; после обновления чекпоинты пересоздают.
+
 ## Демо-хосты
 
 В `Demo/` у каждого примера свой график сна; нужно передавать `dt` и `expected_wake_interval_s`. Адаптация демо — отдельно, см. приложение в спеке #13.

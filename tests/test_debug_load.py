@@ -12,8 +12,6 @@ from intent_memory import IntentMemory
 from storage import AgentStorage
 from affect import AffectiveState
 from temporal import TemporalLevels
-import pickle
-
 print("=" * 70)
 print("DETAILED DEBUG: What's in sleep_manager after load?")
 print("=" * 70)
@@ -45,8 +43,8 @@ print("4. Saving...")
 save_path = storage.save_agent(hip, cortex, selector, affect_state=affect_state, temporal=temporal, sleep_manager=sleep_mgr, filename="debug.pkl", agent=agent)
 
 # Check what was saved
-with open(save_path, 'rb') as f:
-    saved = pickle.load(f)
+from storage import read_agent_state
+saved = read_agent_state(save_path)
     
 print(f"5. Saved data contains:")
 print(f"   'sleep_manager': {'sleep_manager' in saved}")

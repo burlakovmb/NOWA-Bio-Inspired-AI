@@ -7,7 +7,6 @@ trajectory_id, BG relaxation toward a prior, and neuromodulator fixed points.
 """
 
 import inspect
-import pickle
 
 import pytest
 
@@ -600,8 +599,9 @@ def test_old_save_without_new_fields_loads_and_weights_stay(tmp_path):
         agent=agent,
         filename="legacy.pkl",
     )
-    with open(path, "rb") as handle:
-        payload = pickle.load(handle)
+    from storage import read_agent_state, write_agent_state
+
+    payload = read_agent_state(path)
     blob = payload["bg_action_channels"]["act"]
     for key in ("prior_go", "prior_nogo", "prior_habit"):
         blob.pop(key, None)
@@ -612,8 +612,7 @@ def test_old_save_without_new_fields_loads_and_weights_stay(tmp_path):
         for name in ("trajectory_id", "episode_step"):
             if hasattr(exp, name):
                 delattr(exp, name)
-    with open(path, "wb") as handle:
-        pickle.dump(payload, handle)
+    write_agent_state(path, payload)
 
     restored = _agent(actions=("act",), seed=6)
     storage.load_agent(

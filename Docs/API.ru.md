@@ -1338,20 +1338,48 @@ def update(
 
 ## Хранилище
 
-Файл: `src/storage.py`
+Файлы: `src/storage.py`, `src/state_codec.py`
+
+### Формат на диске (issues #16 / #31)
+
+Сохранения агента — документы UTF-8 JSON, не pickle.
+
+| Поле | Значение |
+|---|---|
+| `format` | `nowa-agent-state` |
+| `schema_version` | `1` (единственная версия, которую грузит эта сборка) |
+| Расширение | `.nowa` (по умолчанию `agent_save_*.nowa`) |
+
+`dump_state` / `load_state` в `state_codec.py` проверяют формат, отвергают байты pickle и пишут атомарно. Обёртки: `read_agent_state(path)`, `write_agent_state(path, state)`. Спека: [specs/issue-16-31-safe-agent-state.ru.md](specs/issue-16-31-safe-agent-state.ru.md).
+
+Старые `.pkl` дают `StateFormatError` при load. Миграции нет.
 
 ### `AgentStorage.save_agent(...)` / `load_agent(...)`
-Сохранение включает:
-1. Полную полезную нагрузку нейромодуляторов (`to_dict()`), включая состояние и параметры ACh.
-2. Конфигурацию и состояние слоя ценности и фильтрованной консолидации.
-   - параметры EDPC слоя ValueLayer и состояние исполнения ожидания
-   - параметры воспроизведения EDPC менеджера SleepManager (`edpc_priority_enabled`, `edpc_consolidation_blend`, `shock_priority_gain`)
-   - параметры и состояние SAC менеджера SleepManager (`sac_*`, `last_sac_stats`)
-   - семантические метаданные селектора (`selector_action_metadata`)
-3. Поля исполнения бодрствования, включая циркадные параметры:
-   - `wakefulness`, `last_update_ts`, `accumulated_waking_time`, `total_sleep_time`
-   - `circadian_time_hours`, `circadian_period_hours`, `circadian_amplitude`, `circadian_phase`
-4. Снимок автономной среды исполнения (`drives`, `energy`, `speech`, `tick_count`, `failures`).
+
+В карте `state` — эпизоды гиппокампа и при поддержке `hippocampus_decision` из `export_persistent_state` (сигнатуры, novelty-кэши, окно событий; сигнатуры при load не пересобираются).
+
+Также сохраняется:
+
+1. Полная полезная нагрузка нейромодуляторов (`to_dict()`), включая ACh.
+2. Слой ценности и фильтрованная консолидация (EDPC/SAC, `selector_action_metadata`).
+3. `conflict_arbitration` и `intent_memory`, если переданы (GUI ядра передаёт оба вместе с `agent`).
+4. Двухуровневая пластичность при `agent=`: `labile_layer`, `plasticity_config`, `host_clock_s`, `bg_outcome_slots`, `bg_action_channels`, BG sleep memories, lifetime/runtime/wakefulness/autonomous.
+5. Циркадное бодрствование (`wakefulness`, `last_update_ts`, …).
+6. Снимок автономной среды (`drives`, `energy`, `speech`, `tick_count`, `failures`).
+
+После load `_bind_restored_two_tier(agent, sleep_manager)` перепривязывает managers к `labile` и `plasticity`.
+
+**Не пишется:** гиперпараметры конструктора гиппокампа (ёмкость, decay при создании); живой объект сохраняет свои параметры.
+
+### Чекпоинты песочницы и сотрудника
+
+| Артефакт | Формат | Модуль |
+|---|---|---|
+| `*.ckpt` | `nowa-sandbox-checkpoint`, схема `2` | `Demo/Virtual company/src/nowa_sandbox/sandbox_checkpoint.py` |
+| `*.ckpt.agent.nowa` | `nowa-agent-state`, схема `1` | то же (опционально `sandbox_intent_memory`) |
+| `mind.nowa` | `nowa-agent-state`, схема `1` | `employee_checkpoint.py` (опционально `vc_intent_memory`) |
+
+В метаданных песочницы — `GenomeVector.to_dict()`; эпигеном в файл чекпоинта не входит.
 
 ---
 

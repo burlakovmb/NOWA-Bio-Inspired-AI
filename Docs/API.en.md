@@ -1355,20 +1355,54 @@ Aggregates cycle stats and averages:
 
 ## Storage
 
-File: `src/storage.py`
+Files: `src/storage.py`, `src/state_codec.py`
+
+### On-disk format (issues #16 / #31)
+
+Agent saves are UTF-8 JSON documents, not pickle.
+
+| Field | Value |
+|---|---|
+| `format` | `nowa-agent-state` |
+| `schema_version` | `1` (only version this build loads) |
+| Extension | `.nowa` (default `agent_save_*.nowa`) |
+
+`dump_state` / `load_state` in `state_codec.py` enforce the format, reject pickle bytes, and write atomically. Helpers: `read_agent_state(path)`, `write_agent_state(path, state)`. Spec: [specs/issue-16-31-safe-agent-state.en.md](specs/issue-16-31-safe-agent-state.en.md).
+
+Legacy `.pkl` agent files raise `StateFormatError` on load. There is no migration.
 
 ### `AgentStorage.save_agent(...)` / `load_agent(...)`
-Persistence includes:
+
+The `state` mapping includes hippocampus episodes and, when supported, `hippocampus_decision` from `NOWAHippocampus.export_persistent_state` (signatures, novelty caches, event window — signatures are not rebuilt on load).
+
+Persistence also includes:
+
 1. Full neuromodulator payload (`to_dict()`), including ACh state and parameters.
 2. Value layer and filtered-consolidation configuration/state.
    - ValueLayer EDPC parameters and expectation runtime state
    - SleepManager EDPC replay parameters (`edpc_priority_enabled`, `edpc_consolidation_blend`, `shock_priority_gain`)
    - SleepManager SAC parameters/state (`sac_*`, `last_sac_stats`)
    - Selector semantic metadata (`selector_action_metadata`)
-3. Wakefulness runtime fields, including circadian parameters:
+3. `conflict_arbitration` and `intent_memory` when passed (core GUI passes both on `agent`).
+4. Two-tier host fields when `agent=` is set: `labile_layer`, `plasticity_config`, `host_clock_s`, `bg_outcome_slots`, `bg_action_channels`, BG sleep memories, agent lifetime/runtime/wakefulness/autonomous snapshots.
+5. Wakefulness runtime fields, including circadian parameters:
    - `wakefulness`, `last_update_ts`, `accumulated_waking_time`, `total_sleep_time`
    - `circadian_time_hours`, `circadian_period_hours`, `circadian_amplitude`, `circadian_phase`
-4. Autonomous runtime snapshot (`drives`, `energy`, `speech`, `tick_count`, `failures`).
+6. Autonomous runtime snapshot (`drives`, `energy`, `speech`, `tick_count`, `failures`).
+
+After load, `_bind_restored_two_tier(agent, sleep_manager)` reconnects managers to restored `labile` and `plasticity`.
+
+**Not persisted:** hippocampus constructor hyperparameters (capacity, decay constants chosen at construct time). The live hippocampus object keeps its parameters.
+
+### Sandbox and employee checkpoints
+
+| Artifact | Format | Module |
+|---|---|---|
+| `*.ckpt` | `nowa-sandbox-checkpoint` schema `2` | `Demo/Virtual company/src/nowa_sandbox/sandbox_checkpoint.py` |
+| `*.ckpt.agent.nowa` | `nowa-agent-state` schema `1` | same (optional `sandbox_intent_memory` key) |
+| `mind.nowa` | `nowa-agent-state` schema `1` | `Demo/Virtual company/src/nowa_body/employee_checkpoint.py` (optional `vc_intent_memory`) |
+
+Sandbox metadata stores `GenomeVector.to_dict()`; epigenome is not part of the checkpoint file.
 
 ---
 

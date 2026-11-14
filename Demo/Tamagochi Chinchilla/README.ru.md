@@ -16,4 +16,6 @@ python src/main.py --lang ru
 
 Документы `Docs/PHASE2_MEMORY_SYSTEM.md`, `Docs/PHASE3_SCHEDULING_SYSTEM.md`, `Docs/NOWA_INTEGRATION_SPEC.md` и `Docs/IMPLEMENTATION_SPEC.md` являются нормативными и историческими протоколами. Актуальное состояние сборки — одновременное присутствие модулей ядра и локального этологического слоя, включая `scheduling_system.py` и `DriveSystem`.
 
+Сессия сохраняется в `saves/agent_save.nowa` (`nowa-agent-state`, схема `1`). Старые `.pkl` не грузятся; см. [Docs/specs/issue-16-31-safe-agent-state.ru.md](../../Docs/specs/issue-16-31-safe-agent-state.ru.md).
+
 ---

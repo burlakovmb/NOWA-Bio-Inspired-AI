@@ -3453,6 +3453,8 @@ class NOWAGUI:
                 emotional_regulation=getattr(self.agent, 'emotional_regulation', None),
                 emotional_stability=getattr(self.agent, 'stability_monitor', None),
                 value_layer=getattr(self.agent, 'value_layer', None),
+                conflict_arbitration=getattr(self.agent, 'conflict_arbitration', None),
+                intent_memory=getattr(self.agent, 'intent_memory', None),
                 agent=self.agent
             )
             self.add_to_chat(f"Состояние сохранено: {filepath.split('/')[-1]}", "system")
@@ -3503,6 +3505,7 @@ class NOWAGUI:
                     affect_state=self.agent.affect_state,
                     temporal=self.agent.temporal,
                     sleep_manager=self.sleep_manager,
+                    neuromodulators=getattr(self.agent, 'neuromodulators', None),
                     affective_persistence=getattr(self.agent, 'affective_persistence', None),
                     affective_background=getattr(self.agent, 'affective_background', None),
                     affective_space=getattr(self.agent, 'affective_space', None),
@@ -3512,6 +3515,8 @@ class NOWAGUI:
                     emotional_regulation=getattr(self.agent, 'emotional_regulation', None),
                     emotional_stability=getattr(self.agent, 'stability_monitor', None),
                     value_layer=getattr(self.agent, 'value_layer', None),
+                    conflict_arbitration=getattr(self.agent, 'conflict_arbitration', None),
+                    intent_memory=getattr(self.agent, 'intent_memory', None),
                     agent=self.agent
                 )
                 

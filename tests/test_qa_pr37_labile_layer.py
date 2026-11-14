@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import math
 import os
-import pickle
 
 import pytest
 
@@ -319,16 +318,19 @@ def test_save_load_legacy_empty_and_decay_continues(tmp_path):
         agent=agent,
         filename="qa-legacy-src.pkl",
     )
-    with open(bare, "rb") as handle:
-        payload = pickle.load(handle)
+    from storage import read_agent_state, write_agent_state
+
+    payload = read_agent_state(bare)
     for key in ("labile_layer", "plasticity_config", "host_clock_s"):
         payload.pop(key, None)
     stripped = tmp_path / "qa-stripped.pkl"
-    with open(stripped, "wb") as handle:
-        pickle.dump(payload, handle)
+    write_agent_state(stripped, payload)
     empty = _agent(("go",), seed=5, wake_s=1000.0)
     empty.step(["old"], reward=1.0, terminal=True, dt=0.0)
     assert empty.labile.max_abs_q(empty._host_clock_s) > 0.0
+    kept_q = labile_snapshot(empty)["q"]
+    kept_clock = empty._host_clock_s
+    kept_labile = empty.labile
     storage.load_agent(
         empty.hippocampus,
         empty.cortex,
@@ -336,8 +338,9 @@ def test_save_load_legacy_empty_and_decay_continues(tmp_path):
         str(stripped),
         agent=empty,
     )
-    assert labile_snapshot(empty)["q"] == []
-    assert empty._host_clock_s == pytest.approx(0.0)
+    assert labile_snapshot(empty)["q"] == kept_q
+    assert empty._host_clock_s == pytest.approx(kept_clock)
+    assert empty.labile is kept_labile
 
 
 def test_sleep_increases_stable_q_and_go_of_rewarded_action():

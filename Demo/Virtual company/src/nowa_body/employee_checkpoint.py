@@ -1,10 +1,9 @@
-"""Mind checkpoint (``mind.pkl``) and session sidecar for an employee."""
+"""Mind checkpoint (``mind.nowa``) and session sidecar for an employee."""
 
 from __future__ import annotations
 
 import json
 import os
-import pickle
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,13 +14,13 @@ from nowa_body._compat import ensure_core_src_on_path
 from .employee_config import employee_dir
 from .mcp_capability import parse_risk
 
-MIND_NAME = "mind.pkl"
-MIND_TMP_NAME = "mind.pkl.tmp"
+MIND_NAME = "mind.nowa"
+MIND_TMP_NAME = "mind.nowa.tmp"
 SIDECAR_NAME = "session_sidecar.json"
 
 
 class CheckpointError(Exception):
-    """Raised when the mind pickle cannot be written or is unreadable."""
+    """Raised when the mind document cannot be written or is unreadable."""
 
 
 def mind_path(employees_root: Any, agent_id: str) -> Path:
@@ -84,8 +83,14 @@ def _agent_parts(agent: Any) -> tuple:
 
 
 def save_mind(agent: Any, path: Any) -> None:
-    """Atomic pickle via ``AgentStorage.save_agent(..., agent=)``."""
+    """Atomic save via ``AgentStorage.save_agent(..., agent=)``."""
     ensure_core_src_on_path()
+    from state_codec import (
+        AGENT_STATE_FORMAT,
+        AGENT_STATE_SCHEMA_VERSION,
+        dump_state,
+        load_state,
+    )
     from storage import AgentStorage
 
     target = Path(path)
@@ -104,18 +109,25 @@ def save_mind(agent: Any, path: Any) -> None:
             affective_space=getattr(agent, "affective_space", None),
             value_layer=getattr(agent, "value_layer", None),
             conflict_arbitration=getattr(agent, "conflict_arbitration", None),
+            intent_memory=getattr(agent, "intent_memory", None),
             filename=MIND_TMP_NAME,
             agent=agent,
         )
-        # AgentStorage omits IntentMemory. Keep this employee-owned extension
-        # inside the same atomic checkpoint rather than losing learned habits.
+        # Keep the employee-owned extension inside the same atomic checkpoint.
         intent = getattr(agent, "intent_memory", None)
         if intent is not None and callable(getattr(intent, "to_dict", None)):
-            with tmp.open("rb") as stream:
-                state = pickle.load(stream)
+            state = load_state(
+                tmp,
+                expected_format=AGENT_STATE_FORMAT,
+                supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
+            )
             state["vc_intent_memory"] = intent.to_dict()
-            with tmp.open("wb") as stream:
-                pickle.dump(state, stream)
+            dump_state(
+                tmp,
+                state,
+                format_id=AGENT_STATE_FORMAT,
+                schema_version=AGENT_STATE_SCHEMA_VERSION,
+            )
         os.replace(str(tmp), str(target))
     except Exception as exc:
         try:
@@ -128,6 +140,11 @@ def save_mind(agent: Any, path: Any) -> None:
 
 def load_mind(agent: Any, path: Any) -> None:
     ensure_core_src_on_path()
+    from state_codec import (
+        AGENT_STATE_FORMAT,
+        AGENT_STATE_SCHEMA_VERSION,
+        load_state,
+    )
     from storage import AgentStorage
 
     target = Path(path)
@@ -147,11 +164,15 @@ def load_mind(agent: Any, path: Any) -> None:
             affective_space=getattr(agent, "affective_space", None),
             value_layer=getattr(agent, "value_layer", None),
             conflict_arbitration=getattr(agent, "conflict_arbitration", None),
+            intent_memory=getattr(agent, "intent_memory", None),
             agent=agent,
         )
-        with target.open("rb") as stream:
-            state = pickle.load(stream)
-        if "vc_intent_memory" in state:
+        state = load_state(
+            target,
+            expected_format=AGENT_STATE_FORMAT,
+            supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
+        )
+        if isinstance(state, dict) and "vc_intent_memory" in state:
             from intent_memory import IntentMemory
             from learning_guard import initializing
 

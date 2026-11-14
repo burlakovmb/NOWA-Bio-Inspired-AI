@@ -2,7 +2,6 @@
 import json
 import os
 from pathlib import Path
-import pickle
 import subprocess
 import sys
 
@@ -35,7 +34,7 @@ def test_rejects_unauditable_or_invalid_lesson(field, value):
 def test_existing_employee_cannot_be_overwritten(tmp_path):
     target = tmp_path / "existing_buyer"
     target.mkdir()
-    checkpoint = target / "mind.pkl"
+    checkpoint = target / "mind.nowa"
     checkpoint.write_bytes(b"existing checkpoint")
     with pytest.raises(FileExistsError):
         train(target, ROLE, tmp_path / "not-needed.json")
@@ -75,11 +74,25 @@ def test_legacy_mind_without_intent_extension_still_loads(tmp_path):
     agent, _, _ = make_runtime(ROLE, "legacy_buyer", 1)
     path = tmp_path / "legacy.pkl"
     save_mind(agent, path)
-    with path.open("rb") as stream:
-        state = pickle.load(stream)
-    state.pop("vc_intent_memory")
-    with path.open("wb") as stream:
-        pickle.dump(state, stream)
+    from state_codec import (
+        AGENT_STATE_FORMAT,
+        AGENT_STATE_SCHEMA_VERSION,
+        dump_state,
+        load_state,
+    )
+
+    state = load_state(
+        path,
+        expected_format=AGENT_STATE_FORMAT,
+        supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
+    )
+    state.pop("vc_intent_memory", None)
+    dump_state(
+        path,
+        state,
+        format_id=AGENT_STATE_FORMAT,
+        schema_version=AGENT_STATE_SCHEMA_VERSION,
+    )
     restored, _, _ = make_runtime(ROLE, "legacy_buyer", 1)
     load_mind(restored, path)
     assert restored.selector.actions == agent.selector.actions
@@ -95,7 +108,7 @@ def test_real_core_sleep_checkpoint_and_reload(tmp_path, monkeypatch):
     assert trained["waking_stable_unchanged"]
     assert trained["sleep_changed_stable"]
     assert trained["consolidated_lessons"] == 1
-    assert (target / "training/checkpoints/cycle-001.pkl").is_file()
+    assert (target / "training/checkpoints/cycle-001.nowa").is_file()
     events = [json.loads(line) for line in (target / "training/lessons.jsonl").read_text().splitlines()]
     assert [e["event"] for e in events] == ["baseline", "lesson", "checkpoint"]
     probes = tmp_path / "probes.json"
@@ -110,7 +123,7 @@ def test_real_core_sleep_checkpoint_and_reload(tmp_path, monkeypatch):
     practiced = practice(target, cycles=1)
     assert practiced["completed_cycles"] == 2
     assert practiced["lessons"] == practiced["consolidated_lessons"] == 2
-    assert (target / "training/checkpoints/cycle-001.pkl").is_file()
-    assert (target / "training/checkpoints/cycle-002.pkl").is_file()
+    assert (target / "training/checkpoints/cycle-001.nowa").is_file()
+    assert (target / "training/checkpoints/cycle-002.nowa").is_file()
     assert (target / "training/evaluation-cycle-001.json").is_file()
     assert evaluate(target, probes)["restored_stable_exactly"]

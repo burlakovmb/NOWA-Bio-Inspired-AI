@@ -768,7 +768,7 @@ class SandboxLabApp(tk.Tk if tk is not None else object):
     # ------------------------------------------------------------------ helpers
     def _filetypes_data(self):
         return [
-            (self.t("filetypes.data"), "*.json *.yaml *.yml *.ckpt *.pkl"),
+            (self.t("filetypes.data"), "*.json *.yaml *.yml *.ckpt *.nowa"),
             (self.t("filetypes.all"), "*.*"),
         ]
 

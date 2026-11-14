@@ -88,8 +88,7 @@ print('OK!')
 
 # Посмотреть, как сохраняется
 python -c "
-import pickle
-from src.neuromodulators import NeuromodulatorState
+from neuromodulators import NeuromodulatorState
 nm = NeuromodulatorState()
 print(nm.to_dict())
 "

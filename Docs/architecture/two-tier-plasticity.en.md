@@ -82,6 +82,8 @@ Only the sleep path opens the guard for learning. `SleepManager._apply_replay_td
 
 `PlasticityConfig` is persisted in agent save/load with the labile layer and host clock.
 
+On disk these fields live in a `nowa-agent-state` JSON document (schema version `1`, extension `.nowa`), not pickle. See [issue-16-31-safe-agent-state.en.md](../specs/issue-16-31-safe-agent-state.en.md). Legacy `.pkl` saves are rejected; recreate checkpoints after upgrading.
+
 ## Demo hosts
 
 Under `Demo/`, each sample application chooses its own sleep schedule and should pass `dt` and `expected_wake_interval_s` to match simulation time. Adapting demos is separate from core documentation; see the appendix in issue #13 spec.

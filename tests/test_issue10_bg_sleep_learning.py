@@ -1,6 +1,5 @@
 """Regression for issue #10: BG sleep learning must survive decay and normalization."""
 
-import pickle
 
 import pytest
 
@@ -145,13 +144,13 @@ def test_old_channel_save_without_priors_adopts_loaded_weights(tmp_path):
         agent=agent,
         filename="bg_priors.pkl",
     )
-    with open(path, "rb") as handle:
-        payload = pickle.load(handle)
+    from storage import read_agent_state, write_agent_state
+
+    payload = read_agent_state(path)
     channel_blob = payload["bg_action_channels"]["act"]
     for key in ("prior_go", "prior_nogo", "prior_habit"):
         channel_blob.pop(key, None)
-    with open(path, "wb") as handle:
-        pickle.dump(payload, handle)
+    write_agent_state(path, payload)
 
     restored = _agent(actions=("act",))
     storage.load_agent(

@@ -419,7 +419,7 @@ class ChinchillaAgent:
 
         # ── AgentStorage ──────────────────────────────────────────────
         self.agent_storage = AgentStorage(save_dir=str(self.saves_dir))
-        self._session_save_filename = session_filename or "agent_save.pkl"
+        self._session_save_filename = session_filename or "agent_save.nowa"
         self._session_save_path = self.saves_dir / self._session_save_filename
         self._auto_save_timer: float = 0.0     # full save every 300 sim-s
 
@@ -1916,6 +1916,7 @@ class ChinchillaAgent:
                 emotional_stability=self.stability_monitor,
                 value_layer=self.value_layer,
                 conflict_arbitration=self.conflict_arb,
+                intent_memory=self.intent_memory,
                 agent=self,
                 filename=filename or self._session_save_filename,
             )
@@ -1945,6 +1946,7 @@ class ChinchillaAgent:
                 emotional_stability=self.stability_monitor,
                 value_layer=self.value_layer,
                 conflict_arbitration=self.conflict_arb,
+                intent_memory=self.intent_memory,
                 agent=self,
             )
             self._rewire_two_tier_host()

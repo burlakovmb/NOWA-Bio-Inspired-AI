@@ -88,10 +88,9 @@ print('DA:', nm.dopamine)
 print('OK!')
 "
 
-# Посмотреть, как сохраняется
+# See the dict shape used inside a .nowa save
 python -c "
-import pickle
-from src.neuromodulators import NeuromodulatorState
+from neuromodulators import NeuromodulatorState
 nm = NeuromodulatorState()
 print(nm.to_dict())
 "

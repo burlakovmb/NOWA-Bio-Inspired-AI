@@ -32,7 +32,7 @@ def test_unjudged_actionless_roundtrip_and_idempotency(tmp_path):
     agent.sleep(cycles=3)
     assert not getattr(episode, "td_outcome_committed", False)
     assert not getattr(episode, "consolidated", False)
-    path = tmp_path / "mind.pkl"
+    path = tmp_path / "mind.nowa"
     save_mind(agent, path)
     restored, _, _ = make_runtime(ROLE, "observation_buyer", 1)
     load_mind(restored, path)

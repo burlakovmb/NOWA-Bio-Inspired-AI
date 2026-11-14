@@ -67,7 +67,7 @@ def _weights(agent):
 
 
 def _fresh_loaded(tmp_path, source):
-    path = tmp_path / "mind.pkl"
+    path = tmp_path / "mind.nowa"
     save_mind(source, path)
     restored = spawn_employee_agent("buyer")
     load_mind(restored, path)
@@ -136,16 +136,29 @@ def test_agent_sleep_after_load_matches_in_process_sleep(tmp_path):
 
 def test_old_file_without_intent_memory_keeps_restored_labile(tmp_path):
     source, _ = _agent_with_pending_lesson()
-    path = tmp_path / "mind.pkl"
+    path = tmp_path / "mind.nowa"
     save_mind(source, path)
 
-    import pickle
+    from state_codec import (
+        AGENT_STATE_FORMAT,
+        AGENT_STATE_SCHEMA_VERSION,
+        dump_state,
+        load_state,
+    )
 
-    with path.open("rb") as stream:
-        state = pickle.load(stream)
+    state = load_state(
+        path,
+        expected_format=AGENT_STATE_FORMAT,
+        supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
+    )
     state.pop("vc_intent_memory", None)
-    with path.open("wb") as stream:
-        pickle.dump(state, stream)
+    state.pop("intent_memory", None)
+    dump_state(
+        path,
+        state,
+        format_id=AGENT_STATE_FORMAT,
+        schema_version=AGENT_STATE_SCHEMA_VERSION,
+    )
 
     restored = spawn_employee_agent("buyer")
     load_mind(restored, path)

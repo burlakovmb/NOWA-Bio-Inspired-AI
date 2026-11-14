@@ -28,4 +28,6 @@ python src/nowa_sandbox/run_sandbox.py --config configs/default_world.yaml --sta
 
 Нормативные спецификации в `Docs/` сохраняют контракты модулей. Их предисловия на русском и английском языках отсылают к научному описанию.
 
+Чекпоинты обучения: `*.ckpt` (метаданные, схема `2`) и `*.ckpt.agent.nowa` (состояние агента). Хост сотрудника пишет `mind.nowa` при stop. Pickle-чекпоинты отвергаются; после обновления пересоздают — [Docs/specs/issue-16-31-safe-agent-state.ru.md](../../Docs/specs/issue-16-31-safe-agent-state.ru.md).
+
 ---

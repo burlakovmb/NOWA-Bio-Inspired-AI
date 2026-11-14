@@ -199,7 +199,7 @@ storage.save_agent() сохраняет:
   ├─ affective_persistence (следы) ← НОВОЕ
   └─ agent_lifetime (created_ts, simulated_sleep_seconds) ← НОВОЕ
         ↓
-Файл сохранён в формате pickle
+Файл сохраняется в UTF-8 JSON (`nowa-agent-state`, схема `1`, `.nowa`). Pickle не используется; старые `.pkl` отвергаются.
         ↓
 Интерфейс показывает: «Состояние сохранено»
 ```

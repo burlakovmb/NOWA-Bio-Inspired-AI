@@ -180,6 +180,68 @@ class NOWAHippocampus:
         self.__dict__.clear()
         self.__dict__.update(payload)
 
+    def export_persistent_state(self) -> dict:
+        """Snapshot the trace store that recall, novelty and decay read.
+
+        Experiences stay with the caller. Signatures keep their object link
+        to those experiences, including ``last_decay_ts`` and context fields.
+        """
+        return {
+            "signatures": list(self.signatures),
+            "recent_event_window": list(self._recent_event_window),
+            "novelty_history": [float(value) for value in self._novelty_history],
+            "feature_bits": {str(key): int(value) for key, value in self._feature_bits.items()},
+            "token_bits": {str(key): int(value) for key, value in self._token_bits.items()},
+            "nov_ids": tuple(int(value) for value in self._nov_ids),
+            "nov_valid": bool(self._nov_valid),
+            "novelty_sensitivity_scale": float(self.novelty_sensitivity_scale),
+            "episode_seq_ready": bool(self._episode_seq_ready),
+        }
+
+    def import_persistent_state(self, data: dict) -> None:
+        """Restore a snapshot from ``export_persistent_state``.
+
+        Experiences must already be the saved objects. Signatures are relinked
+        by position and are not rebuilt, so decay anchors and context tokens
+        stay the ones that were saved.
+        """
+        if not isinstance(data, dict):
+            raise TypeError("hippocampus decision state must be a dict")
+        signatures = data.get("signatures", [])
+        if not isinstance(signatures, list):
+            raise TypeError("hippocampus signatures must be a list")
+        if len(signatures) == len(self.experiences):
+            for experience, signature in zip(self.experiences, signatures):
+                if signature is not None:
+                    signature.source_experience = experience
+        self.signatures = list(signatures)
+        window = data.get("recent_event_window") or []
+        self._recent_event_window = [str(item) for item in list(window)]
+        history = []
+        for item in list(data.get("novelty_history") or []):
+            try:
+                history.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        self._novelty_history = history
+        self._feature_bits = {
+            str(key): int(value)
+            for key, value in dict(data.get("feature_bits") or {}).items()
+        }
+        self._token_bits = {
+            str(key): int(value)
+            for key, value in dict(data.get("token_bits") or {}).items()
+        }
+        self._nov_ids = tuple(int(item) for item in tuple(data.get("nov_ids") or ()))
+        self._nov_valid = bool(data.get("nov_valid", False))
+        try:
+            scale = float(data.get("novelty_sensitivity_scale", 1.0))
+        except (TypeError, ValueError):
+            scale = 1.0
+        self.novelty_sensitivity_scale = self._clamp(scale, 0.5, 2.0)
+        self._episode_seq_ready = bool(data.get("episode_seq_ready", False))
+        self._sync_episode_index()
+
     @staticmethod
     def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
         return max(lo, min(hi, float(value)))
