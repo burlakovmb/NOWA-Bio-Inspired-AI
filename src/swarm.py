@@ -679,7 +679,9 @@ class SwarmEnvironment:
 
             step_fn = getattr(affective_space, "step", None)
             if callable(step_fn):
-                step_fn(inputs=payload, uncertainty=uncertainty)
+                # A signal is an impulse. The default time_elapsed of 1 s
+                # would advance affect once per signal.
+                step_fn(inputs=payload, uncertainty=uncertainty, time_elapsed=0.0)
                 return
 
             axes = getattr(affective_space, "axes", None)

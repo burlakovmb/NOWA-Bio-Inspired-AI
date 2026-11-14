@@ -170,6 +170,26 @@ def test_tc_07_sleeping_agent_does_not_wake_from_weak_signal():
     assert not sleeper.step.called
 
 
+def test_social_signal_fallback_is_an_impulse_without_time():
+    env = _build_env(bounds=SpaceBounds(x_max=100.0, y_max=100.0))
+    receiver = _make_agent("receiver")
+    receiver.observe_external_input = None
+    env.add_agent(receiver, position=Position3D(0.0, 0.0, 0.0))
+    signal = SocialSignal(
+        source_agent_id="src",
+        valence=1.0,
+        arousal=0.5,
+        stress=0.2,
+        curiosity=0.1,
+        signal_strength=1.0,
+        source_is_sleeping=False,
+        distance=1.0,
+        step=0,
+    )
+    env.apply_social_signal(receiver, signal, gain=0.2)
+    assert receiver.affective_space.step.call_args.kwargs["time_elapsed"] == 0.0
+
+
 def test_tc_08_sleeping_receiver_applies_half_gain():
     env = _build_env(bounds=SpaceBounds(x_max=100.0, y_max=100.0))
     active_receiver = _make_agent("active_receiver")
