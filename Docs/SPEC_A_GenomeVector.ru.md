@@ -101,7 +101,7 @@ class GenomeVector:
 | `af_decay_trust` | affective_space | 0.85 | 0.99 | 0.95 | 0.02 | инерция доверия |
 | `af_decay_attachment` | affective_space | 0.85 | 0.99 | 0.93 | 0.02 | инерция привязанности |
 | `af_lambda_reg` | affective_space | 0.01 | 0.10 | 0.05 | 0.01 | сила гомеостатического возврата |
-| `af_baseline_adapt_rate` | affective_space | 0.0 | 0.01 | 0.002 | 0.001 | скорость адаптации эмоционального baseline |
+| `af_baseline_adapt_rate` | affective_space | 0.0 | 0.01 | `1/(6×3600)` ≈ 4,63×10⁻⁵ | `0,5/(6×3600)` | скорость аллостатического baseline **за симулированную секунду** (τ ≈ 6 ч) |
 
 ### Группа WK — бодрствование и циркадный ритм
 

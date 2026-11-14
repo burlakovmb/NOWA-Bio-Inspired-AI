@@ -218,7 +218,7 @@ def impulse_to_vector(impulse: Any) -> Dict[str, float]:
 
 
 def apply_impulses(affective_space: Any, impulses: Any, source: str = "external") -> bool:
-    """Push impulses into A(t) via ``step``. Never raises. Returns success."""
+    """Push impulses into A(t) with ``time_elapsed=0``. Never raises. Returns success."""
     if affective_space is None or not impulses:
         return False
     step_fn = getattr(affective_space, "step", None)
@@ -231,7 +231,7 @@ def apply_impulses(affective_space: Any, impulses: Any, source: str = "external"
         "internal": "internal_impulses",
     }.get(str(source).lower(), "external_impulses")
     try:
-        step_fn(**{kwarg: list(payload)})
+        step_fn(**{kwarg: list(payload), "time_elapsed": 0.0})
         return True
     except TypeError:
         pass
@@ -244,7 +244,13 @@ def apply_impulses(affective_space: Any, impulses: Any, source: str = "external"
     if not merged:
         return False
     try:
-        step_fn(inputs=merged)
+        step_fn(inputs=merged, time_elapsed=0.0)
         return True
+    except TypeError:
+        try:
+            step_fn(inputs=merged)
+            return True
+        except Exception:
+            return False
     except Exception:
         return False

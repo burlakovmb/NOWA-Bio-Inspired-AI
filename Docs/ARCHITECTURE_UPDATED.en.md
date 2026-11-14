@@ -87,7 +87,7 @@ All phases work together in a unified system.
 │  ┌──────────────────────────────────────────────┐  │
 │  │  AFFECTIVE CORE (Phase 4)               │  │
 │  │  ├─ 8 canonical axes [-1..1]                │  │
-│  │  ├─ Dynamics: axis_decay/lambda + impulses + optional legacy compat │  │
+│  │  ├─ Dynamics: per-second axis_decay/lambda**dt + impulses + optional legacy compat │  │
 │  │  ├─ Noise from wakefulness/uncertainty/conflict │  │
 │  │  └─ No direct action influence              │  │
 │  └──────────────────────────────────────────────┘  │
@@ -240,12 +240,12 @@ compatibility projections.
 ### Key Properties
 1. Single source of truth: `AffectiveSpace.axes`.
 2. Canonical axes are bounded per-axis in `[-1, 1]`.
-3. Canonical update uses per-axis `axis_decay`, impulse sums, and homeostatic return via `lambda_reg`.
+3. Canonical update integrates per simulated second: retention `clamp(axis_decay−lambda_reg,0,0.999)**dt`, impulse sums at interval end (`AffectiveSpace.step` / `apply_impulses` / `advance`).
 4. Recall impulses are constrained (per-impulse and total-share limits).
 5. Runtime norm is bounded by dynamic cap (`dynamic_norm_cap`).
 6. `dynamic_norm_cap` includes controlled growth and both conditional + global release.
 7. Legacy additive dynamics are opt-in via `legacy_compat_weight` (default `0.0`).
-8. Baseline can adapt slowly at runtime via `baseline_adapt_rate`.
+8. Baseline adapts per simulated second via `baseline_adapt_rate`, with fixed `baseline_setpoint` (`b0`); sleep uses `asleep=True` and `SLEEP_RECOVERY_SCALE` (see [specs/issue-54-affect-simulated-time.en.md](specs/issue-54-affect-simulated-time.en.md)).
 
 ### Canonical Axes
 - valence, arousal, dominance, stress

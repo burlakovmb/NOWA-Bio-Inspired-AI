@@ -395,11 +395,9 @@ class Agent:
             try:
                 recall_vector = self.affective_space.constrained_recall_from_experiences(hip_exps)
                 if recall_vector:
-                    self.affective_space.step(
-                        recall_vector=recall_vector,
-                        time_elapsed=max(0.05, float(step_elapsed or 1.0)),
-                        wakefulness=getattr(self.wakefulness, "wakefulness", 0.0),
-                    )
+                    # Recall biases the choice. Time advances once, in the
+                    # commit that follows this decision.
+                    self.affective_space.apply_impulses(recall_vector=recall_vector)
                     self._project_legacy_affect_from_affective_space(blend=1.0)
                 else:
                     self._pending_recall_impulses = []
@@ -1036,6 +1034,8 @@ class Agent:
             pending = {}
         if effective_modulation is None:
             effective_modulation = pending.get("effective_modulation") or {}
+        step_elapsed = pending.get("step_elapsed", 1.0)
+        time_elapsed = pending.get("time_elapsed", 1.0)
         self._commit_waking_transition(
             action=str(action or ""),
             context_events=context_events,
@@ -1046,8 +1046,8 @@ class Agent:
             novelty=novelty,
             conflict=conflict,
             affective_inputs=affective_inputs,
-            step_elapsed=float(pending.get("step_elapsed", 1.0) or 1.0),
-            time_elapsed=float(pending.get("time_elapsed", 1.0) or 1.0),
+            step_elapsed=float(1.0 if step_elapsed is None else step_elapsed),
+            time_elapsed=float(1.0 if time_elapsed is None else time_elapsed),
             stable_repetition=bool(pending.get("stable_repetition", False)),
             path=path,
             effective_modulation=dict(effective_modulation or {}),
@@ -1393,7 +1393,7 @@ class Agent:
                 affect_state=self.affect_state,
                 neuromodulators=self.neuromodulators,
                 temporal_levels=self.temporal.get_levels(),
-                time_elapsed=step_elapsed,
+                time_elapsed=time_elapsed,
             )
         except Exception:
             pass
@@ -1517,7 +1517,7 @@ class Agent:
             self._queue_slow_affect(
                 reward=float(reward),
                 td_error=td_for_acc,
-                step_elapsed=float(step_elapsed),
+                step_elapsed=float(time_elapsed),
             )
         except Exception:
             pass
@@ -3656,7 +3656,7 @@ class Agent:
                 "traces": traces,
                 "wakefulness": wakefulness,
                 "lifetime_progress": lifetime_progress,
-                "time_elapsed": float(step_elapsed or 1.0),
+                "time_elapsed": float(1.0 if step_elapsed is None else step_elapsed),
                 "agent_lifetime": agent_lifetime,
                 "timestamp": time.time(),
                 "axes": axes,
@@ -3819,7 +3819,20 @@ class Agent:
         except Exception:
             pass
         
-        result = self.sleep_manager.deep_sleep(cycles=cycles)
+        import inspect
+
+        deep_sleep = self.sleep_manager.deep_sleep
+        try:
+            params = inspect.signature(deep_sleep).parameters
+        except (TypeError, ValueError):
+            params = {}
+        accepts_duration = "sleep_duration_seconds" in params or any(
+            param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+        )
+        if accepts_duration:
+            result = deep_sleep(cycles=cycles, sleep_duration_seconds=sleep_duration_seconds)
+        else:
+            result = deep_sleep(cycles=cycles)
         # Legacy outcome cache is not used in replay-driven consolidation.
         self.bg_sleep_memories.clear()
         slots = getattr(self, "_bg_outcome_slots", None)

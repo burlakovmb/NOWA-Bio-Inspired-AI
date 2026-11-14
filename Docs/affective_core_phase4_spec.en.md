@@ -40,14 +40,16 @@ and integration paths in `src/agent.py` / `src/storage.py`.
 
 ### 4. Dynamic baseline
 
-- Baseline can drift slowly toward persistent state using `baseline_adapt_rate`.
+- Baseline adapts in **simulated seconds** via `baseline_adapt_rate` (default ≈ `1/(6×3600)` per second) toward the lived axis; it relaxes toward fixed `baseline_setpoint` (`b0`) at one quarter of that rate.
 - Drift is bounded and clamped per axis.
+- Full rules: [specs/issue-54-affect-simulated-time.en.md](specs/issue-54-affect-simulated-time.en.md).
 
 ### 5. Save/load coverage
 
 `AffectiveSpace.to_dict()/from_dict()` and `AgentStorage.load_agent(...)` include:
 
 - `baseline_adapt_rate`
+- `baseline_setpoint`
 - `norm_cap_global_release_rate`
 - `legacy_compat_weight`
 - `axis_decay` (with alias `affective_decay`)
@@ -64,6 +66,12 @@ and integration paths in `src/agent.py` / `src/storage.py`.
   - `test_affective_space_affective_decay_alias_with_legacy_keys`
   - `test_affective_space_from_dict_supports_affective_decay_alias`
 - `tests/test_affective_space_storage.py` validates persistence for new fields.
+
+### 7. Simulated-second dynamics (2026-11, issue #54 part 1)
+
+- Retention per axis: `clamp(axis_decay − lambda_reg, 0, 0.999) ** time_elapsed`.
+- Split API: `apply_impulses` / `time_elapsed=0` (impulses only), `advance(dt)` (time only), combined `step` (time then impulses).
+- Sleep: `asleep=True`, `SLEEP_RECOVERY_SCALE=4`, cycle dt from `SleepManager` (`SECONDS_PER_SLEEP_CYCLE=1800` when duration omitted).
 
 ---
 
@@ -154,6 +162,8 @@ EmotionalTrace {
 ## 4. State update
 
 ### 4.1 Principal equation
+
+> **Implementation (issue #54):** the live integrator uses per-second retention raised to `time_elapsed`, a moving baseline with `baseline_setpoint`, and impulses at the end of the interval. See [specs/issue-54-affect-simulated-time.en.md](specs/issue-54-affect-simulated-time.en.md). The discrete formula below is the `dt=1` special case of the pre-#54 contract text.
 
 ```
 A_axis(t+1) = Baseline_axis

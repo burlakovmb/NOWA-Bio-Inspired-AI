@@ -23,6 +23,8 @@ At the start of `deep_sleep`, **before** the usual `sleep_cycle` loop:
 
 Then `cycles` iterations of `sleep_cycle()` run (replay TD on **stable Q only**, cortex clustering, SHY BG decay/normalize, temporal chains, forget unstable, `degrade_unused`, neuromodulator sleep dynamics, SAC, etc.). Replay budgets and variance gates from PR #35 still apply.
 
+Each `sleep_cycle` advances canonical affect by one slice of simulated sleep time (`SleepManager._affective_cycle_dt()`): default **1800 s** per cycle, or an even share of `sleep_duration_seconds` across `deep_sleep` cycles. Calls use `AffectiveSpace.step(..., asleep=True)` so axis clearance and return of `baseline` toward `baseline_setpoint` run **4×** faster than wake (`SLEEP_RECOVERY_SCALE`). Details: [specs/issue-54-affect-simulated-time.en.md](specs/issue-54-affect-simulated-time.en.md).
+
 After all cycles, episodes in the batch are marked `consolidated = True` with `consolidated_reward` and `consolidated_revision`. A **second** sleep with no new episodes must not change stable fingerprint fields (`value_layer`, `slow_affect`, `visit_counts`, `strategies`) except SHY/down-scale side effects when cycles &gt; 0.
 
 `sleep(cycles=0)` runs the two-tier pass and marking **without** `sleep_cycle` (no SHY, no cortex multiply from cycles).

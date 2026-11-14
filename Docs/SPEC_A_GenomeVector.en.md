@@ -104,7 +104,7 @@ class GenomeVector:
 | `af_decay_trust` | affective_space | 0.85 | 0.99 | 0.95 | 0.02 | inertia of trust |
 | `af_decay_attachment` | affective_space | 0.85 | 0.99 | 0.93 | 0.02 | inertia of attachment |
 | `af_lambda_reg` | affective_space | 0.01 | 0.10 | 0.05 | 0.01 | strength of homeostatic return |
-| `af_baseline_adapt_rate` | affective_space | 0.0 | 0.01 | 0.002 | 0.001 | rate of adaptation of the emotional baseline |
+| `af_baseline_adapt_rate` | affective_space | 0.0 | 0.01 | `1/(6×3600)` ≈ 4.63×10⁻⁵ | `0.5/(6×3600)` | allostatic baseline rate **per simulated second** (τ ≈ 6 h) |
 
 ### Group WK — wakefulness and the circadian rhythm
 

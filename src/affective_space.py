@@ -160,6 +160,14 @@ DEFAULT_AFFECTIVE_DECAY: Dict[str, float] = {
     "trust": 0.95,
 }
 
+# Axis leak is per second. Allostatic baseline is not: acquisition over 6 h,
+# recovery toward the genetic setpoint 4x slower (24 h). Sleep speeds
+# clearance and recovery, not the acquisition of load.
+BASELINE_ADAPT_TAU_S = 6.0 * 3600.0
+DEFAULT_BASELINE_ADAPT_RATE = 1.0 / BASELINE_ADAPT_TAU_S
+BASELINE_RECOVERY_RATE_RATIO = 0.25
+SLEEP_RECOVERY_SCALE = 4.0
+
 
 def _clamp(value: Any, min_v: float, max_v: float) -> float:
     try:
@@ -167,6 +175,74 @@ def _clamp(value: Any, min_v: float, max_v: float) -> float:
     except Exception:
         v = 0.0
     return max(min_v, min(max_v, v))
+
+def _pow_unit(base: float, exponent: float) -> float:
+    if exponent == 0.0:
+        return 1.0
+    if base <= 1e-15:
+        return 0.0 if exponent > 0.0 else 1.0
+    if abs(base - 1.0) <= 1e-15:
+        return 1.0
+    return math.exp(exponent * math.log(base))
+
+
+def _pow_unit_deriv(base: float, exponent: float) -> float:
+    """``exponent * base ** (exponent - 1)`` for a repeated eigenvalue."""
+    if exponent == 0.0:
+        return 0.0
+    if base <= 1e-15:
+        return 1.0 if abs(exponent - 1.0) <= 1e-15 else 0.0
+    if abs(base - 1.0) <= 1e-15:
+        return exponent
+    return exponent * math.exp((exponent - 1.0) * math.log(base))
+
+
+def _relax_deviation(
+    deviation: float,
+    baseline_deviation: float,
+    dt: float,
+    retention: float,
+    adapt_gain: float,
+    recover_gain: float,
+) -> Tuple[float, float]:
+    """Apply the one-second allostatic map ``dt`` times.
+
+    One second is the legacy step: retention toward baseline, adaptation
+    toward the axis, recovery toward the setpoint. Powering that map by
+    ``dt`` makes one step of ``dt`` seconds match ``dt`` steps of 1 s.
+    """
+    if dt <= 0.0:
+        return deviation, baseline_deviation
+    retain = _clamp(retention, 0.0, 0.999)
+    gain = _clamp(adapt_gain, 0.0, 1.0)
+    recover = _clamp(recover_gain, 0.0, 1.0)
+    keep = 1.0 - recover
+    m00 = retain
+    m01 = 1.0 - retain
+    m10 = keep * gain * retain
+    m11 = keep * (1.0 - gain * retain)
+    trace = m00 + m11
+    det = m00 * m11 - m01 * m10
+    disc = trace * trace - 4.0 * det
+    if disc < 0.0:
+        disc = 0.0
+    gap = math.sqrt(disc)
+    mid = 0.5 * trace
+    high = mid + 0.5 * gap
+    low = mid - 0.5 * gap
+    if gap < 1e-8:
+        coef = _pow_unit_deriv(high, dt)
+        low_pow = _pow_unit(high, dt)
+        low = high
+    else:
+        high_pow = _pow_unit(high, dt)
+        low_pow = _pow_unit(low, dt)
+        coef = (high_pow - low_pow) / (high - low)
+    beta = low_pow - coef * low
+    return (
+        (coef * m00 + beta) * deviation + (coef * m01) * baseline_deviation,
+        (coef * m10) * deviation + (coef * m11 + beta) * baseline_deviation,
+    )
 
 
 def _uniform_value(value: Any) -> Optional[float]:
@@ -446,11 +522,13 @@ class AffectiveSpace:
 
     axes: Dict[str, float] = field(default_factory=dict)
     baseline: Dict[str, float] = field(default_factory=dict)
+    # Genetic setpoint b0. Dynamics never write it; baseline relaxes toward it.
+    baseline_setpoint: Dict[str, float] = field(default_factory=dict)
     alpha: float = 0.85
     axis_decay: Any = field(default_factory=dict)
     affective_decay: Optional[Any] = None
     lambda_reg: float = 0.05
-    baseline_adapt_rate: float = 0.002
+    baseline_adapt_rate: float = DEFAULT_BASELINE_ADAPT_RATE
     norm_cap_base: float = 1.5
     norm_cap_max: float = 2.2
     norm_cap_adapt_rate: float = 0.06
@@ -478,6 +556,16 @@ class AffectiveSpace:
 
         self.axes = self._fill_state_vector(self.axes, default_value=0.0)
         self.baseline = self._fill_state_vector(self.baseline, default_value=0.0)
+        raw_setpoint = self.baseline_setpoint if isinstance(self.baseline_setpoint, dict) else {}
+        if raw_setpoint:
+            self.baseline_setpoint = self._fill_state_vector(raw_setpoint, default_value=0.0)
+            for axis in AXES:
+                if axis not in raw_setpoint:
+                    self.baseline_setpoint[axis] = float(self.baseline.get(axis, 0.0))
+        else:
+            self.baseline_setpoint = dict(self.baseline)
+        for axis in AXES:
+            self.baseline_setpoint[axis] = _clamp(self.baseline_setpoint[axis], -1.0, 1.0)
         self.alpha = _clamp(self.alpha, 0.7, 0.95)
         axis_decay_source: Any = self.axis_decay
         if self.affective_decay is not None:
@@ -912,6 +1000,7 @@ class AffectiveSpace:
             "axes": dict(self.axes),
             "legacy_axes": self.legacy_axes_snapshot(),
             "baseline": dict(self.baseline),
+            "baseline_setpoint": dict(self.baseline_setpoint),
             "alpha": self.alpha,
             "axis_decay": dict(self.axis_decay),
             "affective_decay": dict(self.axis_decay),
@@ -933,6 +1022,7 @@ class AffectiveSpace:
         return {
             "axes": dict(self.axes),
             "baseline": dict(self.baseline),
+            "baseline_setpoint": dict(self.baseline_setpoint),
             "alpha": self.alpha,
             "axis_decay": dict(self.axis_decay),
             "affective_decay": dict(self.axis_decay),
@@ -956,14 +1046,19 @@ class AffectiveSpace:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AffectiveSpace":
+        baseline = data.get("baseline", {})
+        setpoint = data.get("baseline_setpoint", None)
+        if not isinstance(setpoint, dict):
+            setpoint = baseline
         inst = cls(
             axes=data.get("axes", {}),
-            baseline=data.get("baseline", {}),
+            baseline=baseline,
+            baseline_setpoint=setpoint,
             alpha=data.get("alpha", 0.85),
             axis_decay=data.get("axis_decay", data.get("affective_decay", {})),
             affective_decay=data.get("affective_decay"),
             lambda_reg=data.get("lambda_reg", data.get("lambda", 0.05)),
-            baseline_adapt_rate=data.get("baseline_adapt_rate", 0.002),
+            baseline_adapt_rate=data.get("baseline_adapt_rate", DEFAULT_BASELINE_ADAPT_RATE),
             norm_cap_base=data.get("norm_cap_base", 1.5),
             norm_cap_max=data.get("norm_cap_max", data.get("norm_cap_base", 2.2)),
             norm_cap_adapt_rate=data.get("norm_cap_adapt_rate", 0.06),
@@ -1038,22 +1133,29 @@ class AffectiveSpace:
         uncertainty: float = 0.0,
         conflict: float = 0.0,
         background: Optional[Dict[str, float]] = None,
+        asleep: bool = False,
     ) -> Dict[str, float]:
         """
-        Update affective core by one step.
+        Update affective core over ``time_elapsed`` simulated seconds.
 
-        Canonical equation:
-            A_axis(t+1) = baseline_axis + axis_decay[axis] * (A_axis(t) - baseline_axis)
-                        + Sum(external_impulses)
-                        + Sum(recall_impulses)
-                        + Sum(internal_impulses)
-                        - lambda_reg * (A_axis(t) - baseline_axis)
+        ``axis_decay`` is retention per second. One second also applies the
+        homeostat, so the multiplier raised to ``dt`` is
+        ``clamp(axis_decay - lambda_reg, 0, 0.999)``. At ``dt=1`` this is
+        the legacy step. ``time_elapsed=0`` adds impulses and does not
+        decay, drift the baseline, or move the norm cap.
+
+        Baseline tracks the lived axis at ``baseline_adapt_rate`` (per
+        second) and relaxes toward the fixed setpoint ``baseline_setpoint``.
+        ``asleep=True`` clears the axis and restores the setpoint
+        ``SLEEP_RECOVERY_SCALE`` times faster. Impulses are applied after
+        the decay, as an event at the end of the interval.
         """
-        dt = max(0.0, float(time_elapsed or 0.0))
-        if dt <= 0.0:
-            self.last_axes = dict(self.axes)
-            self.timestamp = time.time()
-            return dict(self.axes)
+        try:
+            dt = float(0.0 if time_elapsed is None else time_elapsed)
+        except (TypeError, ValueError):
+            dt = 0.0
+        if not math.isfinite(dt) or dt < 0.0:
+            dt = 0.0
 
         external_payload = external_impulses if external_impulses is not None else inputs
         ext_list = self._normalize_impulse_payload(external_payload, default_source="external")
@@ -1087,22 +1189,33 @@ class AffectiveSpace:
         decay_mult, inertia_mult, noise_mult = self.get_background_modifiers(background)
         noise_gain = self._noise_gain(wakefulness=wakefulness, uncertainty=uncertainty, conflict=conflict)
         compat_weight = _clamp(self.legacy_compat_weight, 0.0, 1.0)
+        sleep_scale = SLEEP_RECOVERY_SCALE if asleep else 1.0
+        adapt_gain = _clamp(self.baseline_adapt_rate, 0.0, 1.0)
+        recover_rate = _clamp(self.baseline_adapt_rate * BASELINE_RECOVERY_RATE_RATIO, 0.0, 1.0)
+        if sleep_scale == 1.0:
+            recover_gain = recover_rate
+        else:
+            recover_gain = 1.0 - (1.0 - recover_rate) ** sleep_scale
+        coupling = adapt_gain * (1.0 - recover_gain)
 
         self.last_axes = dict(self.axes)
         self.last_noise_sigma = {}
+        relaxed_axis: Dict[str, float] = {}
+        relaxed_baseline: Dict[str, float] = {}
 
         for axis in AXES:
             current = float(self.axes.get(axis, 0.0))
             baseline = float(self.baseline.get(axis, 0.0))
+            setpoint = float(self.baseline_setpoint.get(axis, baseline))
             ext = float(ext_vector.get(axis, 0.0))
             rec = float(rec_vector.get(axis, 0.0))
             internal = float(int_vector.get(axis, 0.0))
             axis_decay_factor = _clamp(self.axis_decay.get(axis, self.alpha), 0.0, 0.999)
+            retention = _clamp(axis_decay_factor - float(self.lambda_reg), 0.0, 0.999)
+            if sleep_scale != 1.0:
+                retention = retention ** sleep_scale
 
-            homeostat = self.lambda_reg * (current - baseline) * dt
-
-            # Optional legacy additive dynamics.
-            if compat_weight > 0.0:
+            if compat_weight > 0.0 and dt > 0.0:
                 decay = float(self.decay.get(axis, 0.0)) * decay_mult
                 inertia = float(self.inertia.get(axis, 0.0)) * inertia_mult
                 sigma = float(self.noise_sigma.get(axis, 0.0)) * noise_mult * noise_gain
@@ -1112,21 +1225,66 @@ class AffectiveSpace:
                 sigma = 0.0
                 compat_delta = 0.0
 
-            inertial_component = baseline + (axis_decay_factor * (current - baseline))
-            next_value = inertial_component + ext + rec + internal - homeostat + compat_delta
-            self.axes[axis] = _clamp(next_value, -1.0, 1.0)
+            deviation, baseline_deviation = _relax_deviation(
+                current - setpoint,
+                baseline - setpoint,
+                dt,
+                retention,
+                adapt_gain,
+                recover_gain,
+            )
+            relaxed_axis[axis] = setpoint + deviation
+            relaxed_baseline[axis] = setpoint + baseline_deviation
+            self.axes[axis] = relaxed_axis[axis] + ext + rec + internal + compat_delta
             self.last_noise_sigma[axis] = sigma
 
+        for axis in AXES:
+            self.axes[axis] = _clamp(self.axes[axis], -1.0, 1.0)
         self._enforce_norm_cap()
-        if self.baseline_adapt_rate > 0.0:
-            adapt_gain = _clamp(self.baseline_adapt_rate * dt, 0.0, 1.0)
+        if dt > 0.0:
             for axis in AXES:
-                base_v = float(self.baseline.get(axis, 0.0))
-                target_v = float(self.axes.get(axis, 0.0))
-                self.baseline[axis] = _clamp(base_v + (target_v - base_v) * adapt_gain, -1.0, 1.0)
+                delta = float(self.axes[axis]) - relaxed_axis[axis]
+                self.baseline[axis] = _clamp(relaxed_baseline[axis] + coupling * delta, -1.0, 1.0)
 
         self.timestamp = time.time()
         return dict(self.axes)
+
+    def apply_impulses(
+        self,
+        inputs: Optional[Dict[str, float]] = None,
+        external_impulses: Optional[Any] = None,
+        recall_impulses: Optional[Any] = None,
+        recall_vector: Optional[Dict[str, float]] = None,
+        internal_impulses: Optional[Any] = None,
+    ) -> Dict[str, float]:
+        """Add impulses with no time advance (``time_elapsed=0``)."""
+        return self.step(
+            inputs=inputs,
+            external_impulses=external_impulses,
+            recall_impulses=recall_impulses,
+            recall_vector=recall_vector,
+            internal_impulses=internal_impulses,
+            time_elapsed=0.0,
+        )
+
+    def advance(
+        self,
+        time_elapsed: float = 1.0,
+        wakefulness: float = 0.0,
+        uncertainty: float = 0.0,
+        conflict: float = 0.0,
+        background: Optional[Dict[str, float]] = None,
+        asleep: bool = False,
+    ) -> Dict[str, float]:
+        """Advance retention and allostasis by simulated seconds. No impulses."""
+        return self.step(
+            time_elapsed=time_elapsed,
+            wakefulness=wakefulness,
+            uncertainty=uncertainty,
+            conflict=conflict,
+            background=background,
+            asleep=asleep,
+        )
 
     def speed(self) -> float:
         """Return speed V = |A(t) - A(t-1)| (L1 norm)."""

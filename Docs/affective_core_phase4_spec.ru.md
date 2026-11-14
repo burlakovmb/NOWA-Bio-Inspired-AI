@@ -40,14 +40,16 @@ English version: [affective_core_phase4_spec.en.md](affective_core_phase4_spec.e
 
 ### 4. Динамический базовый уровень
 
-- Базовый уровень может медленно дрейфовать к устойчивому состоянию с коэффициентом `baseline_adapt_rate`.
+- Baseline адаптируется в **симулированных секундах** через `baseline_adapt_rate` (дефолт ≈ `1/(6×3600)` в секунду) к «прожитой» оси; к фиксированному `baseline_setpoint` (`b0`) — с четвертью этой скорости.
 - Дрейф ограничен и обрезается по каждой оси.
+- Полные правила: [specs/issue-54-affect-simulated-time.ru.md](specs/issue-54-affect-simulated-time.ru.md).
 
 ### 5. Покрытие сохранения и загрузки
 
 `AffectiveSpace.to_dict()/from_dict()` и `AgentStorage.load_agent(...)` включают:
 
 - `baseline_adapt_rate`
+- `baseline_setpoint`
 - `norm_cap_global_release_rate`
 - `legacy_compat_weight`
 - `axis_decay` (с псевдонимом `affective_decay`)
@@ -64,6 +66,12 @@ English version: [affective_core_phase4_spec.en.md](affective_core_phase4_spec.e
   - `test_affective_space_affective_decay_alias_with_legacy_keys`
   - `test_affective_space_from_dict_supports_affective_decay_alias`
 - `tests/test_affective_space_storage.py` проверяет сохранение новых полей.
+
+### 7. Динамика в симулированных секундах (2026-11, issue #54, часть 1)
+
+- Удержание по оси: `clamp(axis_decay − lambda_reg, 0, 0.999) ** time_elapsed`.
+- Раздельный API: `apply_impulses` / `time_elapsed=0`, `advance(dt)`, совмещённый `step`.
+- Сон: `asleep=True`, `SLEEP_RECOVERY_SCALE=4`, dt цикла из `SleepManager` (`SECONDS_PER_SLEEP_CYCLE=1800`, если длительность не задана).
 
 ---
 
@@ -154,6 +162,8 @@ EmotionalTrace {
 ## 4. Обновление состояния
 
 ### 4.1 Основное уравнение
+
+> **Реализация (issue #54):** живой интегратор использует удержание за секунду в степени `time_elapsed`, движущийся baseline с `baseline_setpoint` и импульсы в конце интервала. См. [specs/issue-54-affect-simulated-time.ru.md](specs/issue-54-affect-simulated-time.ru.md). Дискретная формула ниже — частный случай `dt=1` исходного контракта.
 
 ```
 A_axis(t+1) = Baseline_axis

@@ -84,7 +84,7 @@ English version: [PROJECT_STATUS_FINAL.en.md](PROJECT_STATUS_FINAL.en.md)
 - Канонический источник истины остаётся `AffectiveSpace.axes`.
 - Прежняя аддитивная динамика включается по выбору: `legacy_compat_weight` (по умолчанию `0.0`).
 - Динамический потолок нормы получает антилипкое освобождение через `norm_cap_global_release_rate`.
-- Дрейф базовой линии во время выполнения поддерживается через `baseline_adapt_rate`.
+- Аллостаз baseline во время выполнения: `baseline_adapt_rate` за симулированную секунду и фиксированный `baseline_setpoint` ([specs/issue-54-affect-simulated-time.ru.md](specs/issue-54-affect-simulated-time.ru.md)).
 - Сохранение и загрузка включают все новые поля аффективного пространства.
 
 Состояние проверки:

@@ -213,7 +213,7 @@ assertiveness = clamp(0.5 + 0.6*dominance + 0.3*bias.goal_priority)
 |---|---|---|---|
 | Neuromodulators | `neuromodulators.py` | R/W | Двусторонняя связь **через Agent**, не циклический import: DA↔valence/curiosity, 5HT↔stability/trust, NE↔arousal/stress, ACh↔curiosity/focus analog (dominance). NM не дублирует оси. |
 | Wakefulness | `wakefulness.py` | R | Уже аргумент `step(wakefulness=)`. Process S не из A(t). Высокий stress может ускорять `update_waking` (коэффициент, не замена Process S). |
-| Sleep | `sleep.py` | R/W | Во сне: `time_elapsed` больше, внешние impulses ≈ 0, background снижает arousal/stress decay иначе (стабилизация). Replay может `recall_trace`. Не вызывать MCP. |
+| Sleep | `sleep.py` | R/W | Во сне: `step(..., asleep=True, time_elapsed=<dt цикла>)` — симулированные секунды сна за цикл (`SECONDS_PER_SLEEP_CYCLE` или `sleep_duration_seconds/cycles`), `SLEEP_RECOVERY_SCALE` на клиренс/восстановление; внешние impulses ≈ 0. Replay может `recall_trace`. MCP не вызывать. См. [specs/issue-54-affect-simulated-time.ru.md](specs/issue-54-affect-simulated-time.ru.md). |
 | Temporal / TemporalChains | `temporal.py`, `temporal_chains.py` | R | Логировать snapshot A(t) в T0/T1 (сейчас частично affect_state). |
 
 ### 4.4 Эволюция, популяция, организм
@@ -224,7 +224,7 @@ assertiveness = clamp(0.5 + 0.6*dominance + 0.3*bias.goal_priority)
 | Epigenome | `epigenome.py` | R | Snapshot может включать `baseline` A(t) как медленный drift (опционально, не ломая формат без миграции). |
 | AgentFactory | `agent_factory.py` | R | Уже применяет affective genes. Проверить, что не пишет в `affect_state` в обход space. |
 | Fitness | `fitness.py` | R | Компонент affective stability: низкий `axis_conflict`, умеренный stress, не застревание у `norm_cap_max`. |
-| Swarm | `swarm.py` | R/W | Уже читает axes в местах — стандартизовать на `snapshot()`. Social signal → external impulse (attachment/trust), не прямая запись. |
+| Swarm | `swarm.py` | R/W | Уже читает axes — стандартизовать на `snapshot()`. Social signal → external impulse. Fallback `step(inputs=…)` без `time_elapsed` двигает **1,0** симулированную секунду (спека issue #54). |
 | Ecology / Reproduction / Mortality | `ecology.py`, `reproduction.py`, `mortality.py` | R | Mortality/stress coupling: высокий sustained stress ↑ mortality pressure (если слой это умеет). Иначе R без W. |
 | PopulationObserver | `population_observer.py` | I | Агрегировать mean axes по популяции. |
 | AutonomousOrganism | `autonomous_organism.py` | R | Drives не заменяют A(t). Energy/drives могут эмитить internal impulses (arousal/stress при depletion). |

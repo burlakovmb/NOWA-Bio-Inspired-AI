@@ -590,7 +590,7 @@ class SandboxTrainer:
             step_fn = getattr(space, "step", None)
             if callable(step_fn):
                 try:
-                    step_fn(external_impulses=[impulse])
+                    step_fn(external_impulses=[impulse], time_elapsed=0.0)
                 except TypeError:
                     try:
                         step_fn(inputs=dict(getattr(impulse, "vector", {}) or {}))
