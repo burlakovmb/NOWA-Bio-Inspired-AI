@@ -146,8 +146,12 @@ def _per_cycle_sleep_seconds(cycles: int, sleep_duration_seconds: Optional[float
 
 class SleepManager:
     """
-    Sleep consolidation — the only writer of the stable tier.
-    
+    Sleep consolidation — writer of the stable tier.
+
+    While awake, outcomes update only the bounded labile layer (Q and Go/NoGo
+    offsets). This manager replays episodes and captures those tags into stable
+    value and channel weights, habit EMA, and cortex.
+
     Process:
     1. Select experiences from hippocampus
     2. Cluster similar experiences
