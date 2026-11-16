@@ -29,7 +29,7 @@ NOWA (in the preprint: Neural Networks with Reward-Based Learning and Evolutiona
 
 The organisational principles are as follows.
 
-First, waking and consolidation are separated. In the active phase the agent records episodes, activates traces, and selects an action. Slow memory and the systemic update of gating channels are performed in the sleep cycle.
+First, waking and consolidation are separated. While awake the agent records episodes, writes a bounded labile layer on Q and Go/NoGo, and selects actions using effective (stable + labile) values. Stable memory and systemic channel-weight updates run in the sleep cycle.
 
 Second, updates are local. The trace bound to a particular context, intention, or action channel is strengthened.
 
@@ -121,7 +121,7 @@ The platform compares the mean valence shift of a colony of sovereign agents wit
 
 The following statements hold in every mode of embodiment, unless a platform's normative specification introduces an explicitly bounded extension.
 
-1. Slow consolidation is confined to the sleep cycle.
+1. Stable parameters consolidate only in sleep; waking writes a bounded labile layer (fast Q and Go/NoGo offsets).
 2. The vector \(A(t)\) is the sole canonical affective state. Axes are not extended by an application platform.
 3. The basal ganglia gate action. The selector and imagination do not execute action.
 4. An episode, once committed, is not rewritten. In protocol mode the path contains one action event.

@@ -134,7 +134,7 @@ Behavior changes immediately (from new weights)
 ```
 User Input
   ↓
-Agent step (no learning!)
+Agent step (episodes + labile offsets)
   ↓
 Rating given → Intensity (0.2-1.0)
   ↓
@@ -346,7 +346,7 @@ A: Make sure you're in src/ directory or have correct path
 > **Behavior is not learned. It emerges from experience and sleep.**
 
 ### Three Key Rules
-1. **Waking** = Store experiences (NO learning)
+1. **Waking** = Episodes + labile Q/Go/NoGo when reward is known
 2. **Sleep** = Consolidate to patterns (ONLY learning)
 3. **Selection** = Pressure-based (NO weights)
 

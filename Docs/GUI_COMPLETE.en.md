@@ -241,7 +241,7 @@ Answer: ✅ YES - through sleep consolidation
 ```
 ✓ All imports work
 ✓ No learning during waking
-✓ Learning only during sleep
+✓ Two-tier plasticity: labile wake, stable sleep
 ✓ Experiences are immutable
 ✓ Selector is non-learnable
 ✓ SleepManager is only learning mechanism

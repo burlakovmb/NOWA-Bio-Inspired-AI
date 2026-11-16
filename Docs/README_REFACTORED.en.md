@@ -12,9 +12,9 @@ NOWA-Cognitive has been successfully refactored to implement the core principle:
 
 This is NOT a machine learning system. It's a cognitive architecture where:
 - Experiences are immutable historical records
-- Learning happens ONLY during sleep consolidation
+- Waking writes a bounded labile layer; stable memory consolidates only in sleep
 - Behavior emerges from memory activation, not weight optimization
-- The agent adapts through consolidation, not learning
+- The agent adapts through labile tags by day and consolidation by night
 
 ---
 
@@ -71,7 +71,7 @@ action = selector.choose(hippocampal_exps, cortical_patterns)
 4. If confidence > threshold: deterministic choice (best option)
 5. If confidence ≤ threshold: stochastic choice (explore)
 
-### 4. **Sleep Manager** (Only Learning Mechanism!)
+### 4. **Sleep Manager** (stable-tier consolidation)
 Consolidates experiences to abstract patterns:
 
 ```python
@@ -109,10 +109,10 @@ Integrates all components:
 ```python
 agent = Agent(hippocampus, cortex, selector, sleep_manager=sleep_manager)
 
-# Waking behavior - no learning happens here!
+# Waking: episodes + labile Q/Go/NoGo offsets when reward is known
 action = agent.step(["user:hello"], consequence=result_event, intensity=1.0)
 
-# Sleep - THIS is where learning happens
+# Sleep: stable Q, channels, habits, cortex
 stats = agent.sleep(cycles=3)
 
 # Check current state

@@ -97,7 +97,7 @@ Phase 3 implements the **Basal Ganglia Action Gating** system - a biologically p
 - **Go/NoGo Competition**: Actions compete through competing channels
 - **Neuromodulator Modulation**: Dopamine, cortisol, serotonin, norepinephrine
 - **PFC Advisory**: Prefrontal cortex can suggest but not dictate
-- **Sleep-Dependent Learning**: Habit consolidation only during sleep
+- **Two-tier plasticity**: Labile Q/Go/NoGo offsets while awake; stable values, habits, and channels consolidate in sleep
 - **Habit Strength**: Learned behaviors influence future selections (weight: ×0.3)
 
 ### Key Documents

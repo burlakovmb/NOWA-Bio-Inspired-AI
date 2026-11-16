@@ -111,7 +111,7 @@ net += channel.habit_strength * habit_gain
 | Competition, not scoring | met | Go/NoGo competition with softmax |
 | Neuromodulators modulate | met | DA, CORT, and NE modulate explicitly |
 | PFC is advisory | met | PFC pressure is added and may be ignored |
-| Sleep-dependent plasticity | met | Learning occurs ONLY during sleep |
+| Sleep-dependent plasticity | met | Labile layer while awake; stable tier consolidates in sleep |
 | Habits participate in selection | met | Added: `net += habit_strength * 0.3` |
 | Normalized scales | met | Documented explicitly in the docstring |
 

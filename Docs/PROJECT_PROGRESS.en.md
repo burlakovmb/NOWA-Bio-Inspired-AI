@@ -91,7 +91,7 @@ $ pytest -q
 ```
                        Agent (waking)
                             |
-                     Store experiences (NO learning)
+                     Episodes + labile Q/Go/NoGo offsets
                             |
                        Sleep Manager
                             |

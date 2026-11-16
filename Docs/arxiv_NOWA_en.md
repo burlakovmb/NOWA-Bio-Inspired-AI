@@ -35,7 +35,7 @@ Sixth, autonomy is bounded by physiology. The continuous life cycle is set by dr
 
 The practical aim of this work is autonomous agents whose behaviour can be traced, that are robust to catastrophic forgetting, and that are capable of emergent social dynamics. A demonstration in the form of a colony of chinchilla agents serves as a controlled environment in which to test these properties: finite resources, mortality, reproduction, and the absence of a central dispatcher. The platform body supplies a second, orthogonal mode of embodiment: the same learning invariants are applied to the tools of an external system.
 
-The contributions of the paper are as follows. The NOWA architecture is formalised as a multilayer cognitive system whose plasticity is confined to the sleep phase, with a canonical affective space and complementary memory systems. An external interaction layer, an autonomous-organism loop, and a protocol body with a mind/effector split are described. A genome of thirty-nine loci is integrated with epigenetic inheritance of consolidated traces, decentralised reproduction, and ecological pressure from the environment. Social structure, generational turnover, and extinction risk are analysed in the chinchilla-colony simulation. Limitations of the approach and ethical risks of autonomous systems trained by reward are discussed.
+The contributions of the paper are as follows. The NOWA architecture is formalised as a multilayer cognitive system with two-tier plasticity: a bounded, decaying labile layer while awake and stable consolidation in sleep, with a canonical affective space and complementary memory systems. An external interaction layer, an autonomous-organism loop, and a protocol body with a mind/effector split are described. A genome of thirty-nine loci is integrated with epigenetic inheritance of consolidated traces, decentralised reproduction, and ecological pressure from the environment. Social structure, generational turnover, and extinction risk are analysed in the chinchilla-colony simulation. Limitations of the approach and ethical risks of autonomous systems trained by reward are discussed.
 
 ---
 
@@ -216,7 +216,7 @@ Sleep pressure (Process S) accumulates during waking toward saturation over a ch
 
 with period T = 24 h and an amplitude encoded in the genome sets chronotype. Reliability of prefrontal control falls as S grows.
 
-A sleep cycle performs: clustering of episodes; consolidation of cortical patterns; TD replay with a bounded budget and eligibility trace; update of basal-ganglia channels; discovery of temporal chains; degradation of unused habits and realisation forms; recovery of Process S. This is the only loop in which slow memory and gating-channel weights are modified systemically.
+A sleep cycle performs: clustering of episodes; consolidation of cortical patterns; TD replay with a bounded budget and eligibility trace; capture of labile tags into stable basal-ganglia and value weights; discovery of temporal chains; degradation of unused habits and realisation forms; recovery of Process S. Waking writes decaying labile offsets on Q and Go/NoGo; sleep is the consolidation loop for stable memory and channel weights.
 
 In the protocol regime the sleep scheduler is separated from the decision tick: accumulation of wakefulness and the sleep-cycle call occur after selection, not inside it.
 
