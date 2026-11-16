@@ -239,7 +239,7 @@ Answer: ✅ YES - through sleep consolidation
 ```
 ✓ All imports work
 ✓ No learning during waking
-✓ Learning only during sleep
+✓ Двухуровневая пластичность: лабильный день, стабильный сон
 ✓ Experiences are immutable
 ✓ Selector is non-learnable
 ✓ SleepManager is only learning mechanism

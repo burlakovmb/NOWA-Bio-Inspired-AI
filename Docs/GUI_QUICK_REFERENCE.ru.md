@@ -134,7 +134,7 @@ Behavior changes immediately (from new weights)
 ```
 User Input
   ↓
-Agent step (no learning!)
+Agent step (episodes + labile offsets)
   ↓
 Rating given → Intensity (0.2-1.0)
   ↓
@@ -347,7 +347,7 @@ A: Make sure you're in src/ directory or have correct path
 
 ### Три правила
 1. **Бодрствование** = сохранение опытов (без обучения)
-2. **Сон** = консолидация в паттерны (единственное обучение)
+2. **Сон** = консолидация стабильного слоя (Q, каналы, привычки, кора)
 3. **Выбор** = на основе давления (без весов)
 
 ### Подтверждение

@@ -35,8 +35,8 @@ Phase 3 introduces the **basal ganglia** as the central *gate* of action taking.
    - weaken
    - add noise
 
-5. **Sleep-dependent plasticity**
-   Learning of the channels occurs **only during sleep**.
+5. **Two-tier plasticity**
+   Waking outcomes write **labile** Go/NoGo offsets; **stable** channel weights consolidate in sleep.
 
 ---
 
@@ -164,7 +164,7 @@ P(action_i) = softmax(Net_i / temperature)
 
 ---
 
-## Learning (only during sleep)
+## Learning (two-tier: labile wake, stable sleep)
 
 ### Sleep BG plasticity
 

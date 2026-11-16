@@ -594,7 +594,10 @@ _add("❌ Ошибка при консолидации:", "❌ Consolidation fai
 _add("💤 Запуск {cycles} цикла(ов) консолидации...", "💤 Starting {cycles} consolidation cycle(s)...", "💤 Запуск {cycles} цикла(ов) консолидации...")
 _add("✅ Консолидация завершена: {cycles} цикл(ов), {patterns} паттернов", "✅ Consolidation finished: {cycles} cycle(s), {patterns} patterns", "✅ Консолидация завершена: {cycles} цикл(ов), {patterns} паттернов")
 _add("Автоматическая тренировка селектора больше не поддерживается.", "Automatic selector training is no longer supported.")
-_add("В NOWA обучение происходит ТОЛЬКО во время сна через консолидацию.", "In NOWA, learning happens ONLY during sleep, through consolidation.")
+_add(
+    "В NOWA днём пишется лабильный слой (быстрые смещения Q и Go/NoGo); стабильная память консолидируется во сне.",
+    "In NOWA, waking updates the labile layer (fast Q and Go/NoGo offsets); stable memory consolidates in sleep.",
+)
 _add("Используйте вместо этого:", "Use this instead:")
 _add("1. 🌙 Сон - консолидирует опыты в паттерны", "1. 🌙 Sleep — consolidates experiences into patterns")
 _add("2. Инспектор - смотрите состояние памяти", "2. Inspector — inspect memory state")

@@ -66,9 +66,9 @@ The NOWA-Cognitive project has been successfully refactored according to the ref
 
 ---
 
-### 4. **Sleep — Only Learning Mechanism**
-- Sleep consolidation is THE ONLY way learning happens
-- No learning during waking activity
+### 4. **Sleep — stable-tier consolidation**
+- Stable memory updates only in sleep consolidation
+- Waking writes a bounded labile layer (Q and Go/NoGo offsets)
 - Clustering of similar experiences
 - Abstraction into cortical patterns
 - Forgetting of unstable traces

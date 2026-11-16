@@ -17,7 +17,7 @@ The NOWA-Cognitive GUI has been fully refactored to work with the new cognitive 
 
 ### Core Principle
 **Before:** Learning during waking activity (ML/RL style)
-**After:** Learning ONLY during sleep consolidation (cognitive neuroscience style)
+**After:** Two-tier plasticity — labile offsets while awake, stable consolidation in sleep
 
 ### In the GUI
 
@@ -39,7 +39,7 @@ The NOWA-Cognitive GUI has been fully refactored to work with the new cognitive 
 - Experience loading (→ hippocampus, not direct to cortex)
 - Statistics display (consolidation cycles, pattern counts)
 - Memory visualization (episodic + semantic separation)
-- Feedback processing (store with intensity, no learning)
+- Feedback processing (store with intensity; labile offsets when reward is known)
 
 ---
 
@@ -127,7 +127,7 @@ agent = Agent(hippocampus, cortex, selector, sleep_manager)
 # Processing
 action = agent.step(context)  # No reward parameter
 
-# Learning (ONLY during sleep)
+# Stable consolidation (sleep)
 stats = agent.sleep(cycles=N)
 
 # Feedback (converts to intensity)
@@ -141,13 +141,13 @@ intensity = (rating + 3) / 5.0  # -2..2 → 0.2..1.0
 ### GUI Tests: 15/15 ✅
 - GUI imports correctly
 - Agent initializes properly
-- Waking has no learning
+- Waking writes labile offsets only
 - Sleep consolidates
 - Feedback stores with intensity
 - Agent state reflects consolidation
 - Selector is non-learnable
 - Experiences are immutable
-- SleepManager is only learning
+- SleepManager consolidates the stable tier
 - Components initialize for GUI
 - Complete workflow succeeds
 - NOWA principle verified
@@ -292,7 +292,7 @@ trainer = SelectorTrainer(...)
 - [x] Sleep cycles increment properly
 - [x] Selector is non-learnable
 - [x] Experiences are immutable
-- [x] SleepManager is only learning
+- [x] SleepManager consolidates stable memory
 - [x] All tests passing (81/81)
 - [x] Deprecated features handled
 - [x] Documentation complete

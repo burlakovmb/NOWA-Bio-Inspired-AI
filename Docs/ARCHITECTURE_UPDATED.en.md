@@ -825,7 +825,7 @@ WAKING STATE:
               Net = 0.2 - 0.5*1.6 = -0.6
               → FLEE SELECTED (even with low go_weight!)
 
-3. No learning yet (must happen during sleep)
+3. Labile Q/Go/NoGo offsets updated; stable tier unchanged until sleep
 
 SLEEPING STATE:
 1. Sleep consolidation begins
@@ -848,7 +848,7 @@ SLEEPING STATE:
 
 | Principle | Description |
 |-----------|------------|
-| **Selective Learning** | Only learning during sleep, not during waking |
+| **Two-tier plasticity** | Labile offsets while awake; stable parameters consolidate in sleep |
 | **Modulation not Dictation** | Neuromodulators change HOW we learn, not WHAT we choose |
 | **Competition not Cooperation** | Actions compete via Go/NoGo, winner takes all |
 | **Biological Plausibility** | Maps to real brain circuits (BG, DA, cortisol, etc) |
@@ -998,7 +998,7 @@ Additional Phase 4.x coverage:
 
 1. **Don't break the architecture**
    - Actions chosen by Basal Ganglia only
-   - Learning only happens during sleep
+   - Stable learning only in sleep; waking updates the labile layer
    - Neuromodulators modulate, don't dictate
 
 2. **Use proper data flows**
