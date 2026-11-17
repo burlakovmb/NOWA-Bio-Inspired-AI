@@ -216,6 +216,7 @@ class ColonyStorage:
                 "metabolism_tick": _f(agent._metabolism_tick),
                 "body_step_carry": _f(getattr(agent, "_body_step_carry", 0.0)),
                 "sleep_entered_by_need": bool(getattr(agent, "_sleep_entered_by_need", False)),
+                "alarm": agent._export_alarm_state(),
                 "pending_offer": self._serialize_pending_offer(agent.pending_offer),
                 "physiology_as_policy": bool(getattr(agent, "physiology_as_policy", True)),
             },
@@ -329,6 +330,12 @@ class ColonyStorage:
         agent.affective_space.axes["valence"] = valence
         agent.affective_space.axes["attachment"] = attachment
         agent.affective_space.axes["curiosity"] = _clamp(1.0 - boredom, 0.0, 1.0)
+        # Missing on saves from before alarm bouts were stored. Anchor at the
+        # restored level so a high saved stress is not treated as a fresh spike.
+        if "alarm" in runtime:
+            agent._restore_alarm_state(runtime.get("alarm"))
+        else:
+            agent._anchor_alarm_stress()
 
         agent.is_pregnant = bool(reproduction.get("is_pregnant", False))
         agent.gestation_timer = _f(reproduction.get("gestation_timer", 0.0), 0.0)

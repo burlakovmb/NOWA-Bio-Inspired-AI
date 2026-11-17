@@ -115,6 +115,42 @@ MOUNT_DISPLAY_MIN_DRIVE_SCORE = 0.20
 RESOURCE_MISSING_ENERGY_PENALTY_PER_S = 0.02
 WATER_MISSING_ENERGY_PENALTY_PER_S = 0.015
 
+# A bark is an event, not a stress level. Chinchilla contact calls follow an
+# acute rise (about a fifth of the axis inside a few seconds). A level that
+# merely sits high does not keep the call going.
+ALARM_RISE_WINDOW_S = 4.0
+# Above one familiar bark (0.30 * 0.7 = 0.21). A single neighbour does not
+# start a new bout; a sharper endogenous spike, or several callers in the
+# same window, does. Otherwise every bark is a chain.
+ALARM_RISE_MIN = 0.35
+# One bout, then a pause on the order of a quarter-minute. Long enough that
+# a 0.25 s tick cannot retrigger, short enough that a new spike still counts.
+ALARM_REFRACTORY_S = 15.0
+# Audible across the next colony pass. Sub-ticks are at most 0.25 s and a
+# direct 1 s step still falls inside the window, so every neighbour of that
+# bout hears it once. Listeners key off the event id.
+ALARM_CALL_AUDIBLE_S = 2.0
+# A familiar caller is more salient than a stranger. Intensity is applied
+# later, in ``_apply_affect_impulse`` (0.7), which keeps the old 0.21 / 0.105.
+ALARM_KNOWN_STRESS = 0.30
+ALARM_UNKNOWN_STRESS = 0.15
+ALARM_AROUSAL = 0.10
+ALARM_IMPULSE_INTENSITY = 0.7
+# NREM gates sound. A sleeper does not bark. A bark that arrives during sleep
+# is attenuated by thalamic gating (about a third), not erased: a sharp
+# conspecific call can register without the full waking HPA spike.
+ALARM_SLEEP_HEARING_GAIN = 0.35
+# Pair-bond buffering. This is well above the mount gate (~0.2) and a casual
+# acquaintance (~0.4). One such neighbour nearby is enough; the caller
+# themselves does not buffer their own bark.
+ALARM_BUFFER_AFFINITY = 0.65
+ALARM_BUFFER_GAIN = 0.60
+# Orienting habituation: repeated barks from the same animal lose force and
+# return over about two minutes if that caller goes quiet.
+ALARM_HABITUATION_RETAIN = 0.60
+ALARM_HABITUATION_FLOOR = 0.30
+ALARM_HABITUATION_TAU_S = 120.0
+
 logger = logging.getLogger(__name__)
 
 
@@ -271,6 +307,13 @@ class ChinchillaAgent(Agent):
                 expected_wake_interval_s=colony_expected_wake_interval_s(),
             ),
         )
+        # Affect noise was an unseeded Random(), so the same colony seed
+        # did not repeat. Tie it to the host seed when one was given.
+        if rng_seed is not None:
+            try:
+                self.affective_space.rng.seed(int(rng_seed))
+            except Exception:
+                pass
 
         # Ensure neuromodulator baselines exist (guard against zeroing by factories/loaders)
         try:
@@ -386,6 +429,15 @@ class ChinchillaAgent(Agent):
         # (Process S at onset). A voluntary nap must not trap the animal.
         self._sleep_entered_by_need: bool = False
         self._sleep_consolidation_accum_s: float = 0.0
+        # Alarm bout state. Defaults are safe for a save that predates them.
+        self._alarm_stress_trace: list[tuple[float, float]] = []
+        self._alarm_call_open: bool = False
+        self._alarm_event_id: int = 0
+        self._alarm_event_until: float = 0.0
+        self._alarm_refractory_until: float = 0.0
+        self._alarm_emit_count: int = 0
+        self._alarm_habituation: dict[str, tuple[float, float]] = {}
+        self._alarm_heard: dict[str, int] = {}
         self.unconditioned_reflexes: tuple[UnconditionedReflex, ...] = (
             self.behavior_profile.unconditioned_reflexes
         )
@@ -405,6 +457,7 @@ class ChinchillaAgent(Agent):
                     )
             except Exception:
                 pass
+        self._anchor_alarm_stress()
 
     @property
     def stress(self) -> float:
@@ -531,14 +584,9 @@ class ChinchillaAgent(Agent):
                 inputs["trust"] = _clamp(trust * scale, -1.0, 1.0)
             if not inputs:
                 return
-            stress_signal = abs(inputs.get("stress", 0.0))
-            self.affective_space.step(
-                inputs=inputs,
-                time_elapsed=1.0,
-                wakefulness=self.wakefulness.wakefulness,
-                uncertainty=stress_signal * 0.5,
-                conflict=max(0.0, inputs.get("stress", 0.0)),
-            )
+            # Impulse only. Affect time moves once per sim_step, not once per
+            # call. A rate such as stress=0.0008*dt stays scaled by the caller.
+            self.affective_space.apply_impulses(inputs=inputs)
         except Exception:
             pass
 
@@ -607,8 +655,23 @@ class ChinchillaAgent(Agent):
         self._social_step()
         self._apply_sleep_recovery(dt)
         reward = self._compute_reward(before=before, executed_action=executed)
+        asleep_affect = False
         if not advanced_by_step:
             self.advance_time(host_dt)
+            # Need-sleep did not call step(), so commit would reuse the
+            # previous decision's affect dt (or the 1 s default). One asleep
+            # advance owns this tick; commit must not integrate a second one.
+            if self.is_sleeping and self._sleep_entered_by_need:
+                self._advance_affect_while_asleep(host_dt)
+                asleep_affect = True
+        # The commit's derived impulse is a waking appraisal. On a need-sleep
+        # tick the reward is mostly -stress, and that impulse is large enough
+        # to cancel the 4x sleep recovery and hold the axis near 0.77. The
+        # asleep advance is this tick's affect change. The episode is still
+        # recorded.
+        commit_affect = None
+        if asleep_affect:
+            commit_affect = {axis: 0.0 for axis in self.affective_space.axes}
         self.commit_executed_transition(
             action=executed,
             reward=reward,
@@ -619,6 +682,7 @@ class ChinchillaAgent(Agent):
             novelty=novelty,
             conflict=conflict,
             intensity=intensity,
+            affective_inputs=commit_affect,
         )
         self._resource_metabolism_step(dt)
         self._apply_unmet_need_cost(dt)
@@ -1110,6 +1174,9 @@ class ChinchillaAgent(Agent):
             cycles = int(self._sleep_consolidation_accum_s // SLEEP_CONSOLIDATION_INTERVAL_S)
             cycles = max(1, min(SLEEP_MAX_CONSOLIDATION_CYCLES_PER_TICK, cycles))
             self._sleep_consolidation_accum_s -= cycles * SLEEP_CONSOLIDATION_INTERVAL_S
+            # Affect time during sleep already advances once per tick
+            # (_advance_affect_while_asleep). A real bout length here would
+            # add that same interval again inside deep_sleep.
             self.sleep(cycles=cycles, sleep_duration_seconds=0.0)
 
         if self._should_wake_now() or self._must_wake_to_drink_or_eat():
@@ -1353,18 +1420,191 @@ class ChinchillaAgent(Agent):
         self._perceive_alarm_calls()
 
     def _perceive_alarm_calls(self) -> None:
+        now = float(self.sim_time)
         for other in self.colony:
             if other is self or not other._is_emitting_alarm():
                 continue
-            impulse = 0.3 if other.agent_id in self.knowledge else 0.15
-            self._apply_affect_impulse(stress=impulse, arousal=0.1, intensity=0.7)
+            # Same zone or a neighbour. A distant bark is not this animal's event.
+            if not is_same_or_adjacent(self.position, other.position):
+                continue
+            event_id = int(getattr(other, "_alarm_event_id", 0))
+            if self._alarm_heard.get(other.agent_id) == event_id:
+                continue
+            self._alarm_heard[other.agent_id] = event_id
             known = self.knowledge.get(other.agent_id)
+            base = ALARM_KNOWN_STRESS if known is not None else ALARM_UNKNOWN_STRESS
+            scale = self._alarm_caller_gain(other.agent_id, now)
+            scale *= self._alarm_social_buffer(other.agent_id)
+            if self.is_sleeping:
+                scale *= ALARM_SLEEP_HEARING_GAIN
+            self._apply_affect_impulse(
+                stress=base * scale,
+                arousal=ALARM_AROUSAL * scale,
+                intensity=ALARM_IMPULSE_INTENSITY,
+            )
             if known is not None:
                 known.last_seen_position = other.position
                 known.last_seen_affect = "fearful"
 
     def _is_emitting_alarm(self) -> bool:
-        return self.stress > 0.7
+        self._ensure_alarm_call()
+        if self.is_sleeping or not self._alarm_call_open:
+            return False
+        return float(self.sim_time) <= float(self._alarm_event_until) + 1e-9
+
+    def _anchor_alarm_stress(self) -> None:
+        """Treat the current stress as the start of the rise window.
+
+        A freshly built or loaded animal is not in the middle of a spike,
+        even when the saved level is already high.
+        """
+        now = float(getattr(self, "sim_time", 0.0) or 0.0)
+        self._alarm_stress_trace = [(now, float(self.stress))]
+
+    def _sample_alarm_stress(self, now: float) -> None:
+        value = float(self.stress)
+        trace = self._alarm_stress_trace
+        if trace and abs(trace[-1][0] - now) <= 1e-9:
+            trace[-1] = (now, value)
+        else:
+            trace.append((now, value))
+        cutoff = now - ALARM_RISE_WINDOW_S
+        if len(trace) > 8:
+            self._alarm_stress_trace = [item for item in trace if item[0] >= cutoff - 1e-9]
+
+    def _alarm_stress_rise(self, now: float) -> float:
+        cutoff = now - ALARM_RISE_WINDOW_S
+        anchor: float | None = None
+        for stamp, value in self._alarm_stress_trace:
+            if stamp >= cutoff - 1e-9:
+                anchor = value
+                break
+        if anchor is None:
+            return 0.0
+        return float(self.stress) - float(anchor)
+
+    def _ensure_alarm_call(self) -> None:
+        now = float(self.sim_time)
+        if self.is_sleeping:
+            # A sleeper does not bark. An open bout ends when sleep starts.
+            self._alarm_call_open = False
+            self._sample_alarm_stress(now)
+            return
+        if self._alarm_call_open and now <= float(self._alarm_event_until) + 1e-9:
+            return
+        self._alarm_call_open = False
+        if now < float(self._alarm_refractory_until) - 1e-9:
+            self._sample_alarm_stress(now)
+            return
+        rise = self._alarm_stress_rise(now)
+        self._sample_alarm_stress(now)
+        if rise < ALARM_RISE_MIN:
+            return
+        self._alarm_event_id += 1
+        self._alarm_call_open = True
+        self._alarm_event_until = now + ALARM_CALL_AUDIBLE_S
+        self._alarm_refractory_until = now + ALARM_REFRACTORY_S
+        self._alarm_emit_count += 1
+
+    def _alarm_caller_gain(self, caller_id: str, now: float) -> float:
+        """Sensitivity to this caller. Repeated bouts fade; quiet time restores it."""
+        sensitivity, last = self._alarm_habituation.get(caller_id, (1.0, now))
+        elapsed = max(0.0, now - float(last))
+        if ALARM_HABITUATION_TAU_S > 0.0:
+            retained = math.exp(-elapsed / ALARM_HABITUATION_TAU_S)
+            sensitivity = 1.0 - (1.0 - float(sensitivity)) * retained
+        applied = max(ALARM_HABITUATION_FLOOR, min(1.0, sensitivity))
+        updated = max(ALARM_HABITUATION_FLOOR, applied * ALARM_HABITUATION_RETAIN)
+        self._alarm_habituation[caller_id] = (updated, now)
+        return applied
+
+    def _alarm_social_buffer(self, caller_id: str) -> float:
+        """A bonded neighbour, other than the caller, damps the acute impulse."""
+        for other in self.colony:
+            if other is self or other.agent_id == caller_id:
+                continue
+            if not is_same_or_adjacent(self.position, other.position):
+                continue
+            known = self.knowledge.get(other.agent_id)
+            if known is None:
+                continue
+            if float(known.affinity) >= ALARM_BUFFER_AFFINITY:
+                return ALARM_BUFFER_GAIN
+        return 1.0
+
+    def _export_alarm_state(self) -> dict[str, object]:
+        return {
+            "refractory_until": float(self._alarm_refractory_until),
+            "event_id": int(self._alarm_event_id),
+            "event_until": float(self._alarm_event_until),
+            "call_open": bool(self._alarm_call_open),
+            "emit_count": int(self._alarm_emit_count),
+            "stress_trace": [[float(t), float(v)] for t, v in self._alarm_stress_trace],
+            "habituation": {
+                str(key): [float(sens), float(stamp)]
+                for key, (sens, stamp) in self._alarm_habituation.items()
+            },
+            "heard": {str(key): int(value) for key, value in self._alarm_heard.items()},
+        }
+
+    def _restore_alarm_state(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            self._anchor_alarm_stress()
+            return
+        self._alarm_refractory_until = _coerce_finite(payload.get("refractory_until"), 0.0)
+        self._alarm_event_id = max(0, int(_coerce_finite(payload.get("event_id"), 0.0)))
+        self._alarm_event_until = _coerce_finite(payload.get("event_until"), 0.0)
+        self._alarm_call_open = bool(payload.get("call_open", False))
+        self._alarm_emit_count = max(0, int(_coerce_finite(payload.get("emit_count"), 0.0)))
+        trace: list[tuple[float, float]] = []
+        raw_trace = payload.get("stress_trace")
+        if isinstance(raw_trace, list):
+            for item in raw_trace:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    trace.append((_coerce_finite(item[0], 0.0), _coerce_finite(item[1], 0.0)))
+        self._alarm_stress_trace = trace or [(float(self.sim_time), float(self.stress))]
+        habituation: dict[str, tuple[float, float]] = {}
+        raw_hab = payload.get("habituation")
+        if isinstance(raw_hab, dict):
+            for key, item in raw_hab.items():
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    sens = min(1.0, max(ALARM_HABITUATION_FLOOR, _coerce_finite(item[0], 1.0)))
+                    habituation[str(key)] = (sens, _coerce_finite(item[1], 0.0))
+        self._alarm_habituation = habituation
+        heard: dict[str, int] = {}
+        raw_heard = payload.get("heard")
+        if isinstance(raw_heard, dict):
+            for key, value in raw_heard.items():
+                heard[str(key)] = max(0, int(_coerce_finite(value, 0.0)))
+        self._alarm_heard = heard
+
+    def _advance_affect_while_asleep(self, host_dt: float) -> None:
+        """One asleep affect interval for this tick.
+
+        Commit still steps the space with the pending decision dt. This path
+        took no decision, so that pending value is the previous tick or the
+        1 s default. Clear it, then advance sleep recovery once.
+        """
+        pending = getattr(self, "_pending_commit_context", None)
+        if not isinstance(pending, dict):
+            pending = {}
+            self._pending_commit_context = pending
+        pending["time_elapsed"] = 0.0
+        pending["step_elapsed"] = 0.0
+        try:
+            elapsed = max(0.0, float(host_dt))
+        except (TypeError, ValueError):
+            elapsed = 0.0
+        if not math.isfinite(elapsed):
+            elapsed = 0.0
+        try:
+            wake = float(self.wakefulness.wakefulness)
+        except Exception:
+            wake = 0.0
+        try:
+            self.affective_space.advance(elapsed, wakefulness=wake, asleep=True)
+        except Exception:
+            pass
 
     def _social_step(self) -> None:
         if self.physiology_as_policy and self.current_action not in {
