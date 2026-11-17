@@ -1405,22 +1405,39 @@ class Agent:
         # Update affective space (Phase 4 pre) - no action influence
         try:
             space_inputs = affective_inputs
+            affect_dt = time_elapsed if time_elapsed is not None else step_elapsed
+            try:
+                affect_dt = float(affect_dt)
+            except (TypeError, ValueError):
+                affect_dt = 0.0
+            if not math.isfinite(affect_dt) or affect_dt < 0.0:
+                affect_dt = 0.0
             if space_inputs is None:
-                space_inputs = self._derive_affective_space_inputs(
+                # Appraisal is a drive: change per second. The axis moves by
+                # the integral over this tick. At dt=1 the kick matches the
+                # legacy one-second step.
+                derived = self._derive_affective_space_inputs(
                     reward=reward,
                     novelty=novelty,
                     conflict=conflict,
                     intensity=intensity,
                 )
+                space_inputs = {
+                    str(key): float(value) * affect_dt
+                    for key, value in dict(derived or {}).items()
+                }
             self.affective_space.step(
                 inputs=space_inputs,
                 recall_impulses=getattr(self, "_pending_recall_impulses", None) or [],
-                time_elapsed=time_elapsed if time_elapsed is not None else step_elapsed,
+                time_elapsed=affect_dt,
                 wakefulness=self.wakefulness.wakefulness,
                 uncertainty=novelty,
                 conflict=conflict,
                 background=getattr(self.affective_background, "snapshot", lambda: {})(),
             )
+            # One physiological interval. Later body slices of this same
+            # host dt must not run retention a second time.
+            self.affective_space.affect_time_credit_s = affect_dt
             self._pending_recall_impulses = []
             self._project_legacy_affect_from_affective_space(blend=1.0)
             try:
@@ -4158,9 +4175,11 @@ class Agent:
 
     def _derive_affective_space_inputs(self, reward: float, novelty: float, conflict: float, intensity: float) -> dict:
         """
-        Derive canonical affective-core impulse vector from current signals.
+        Derive the per-second affective drive from the current signals.
 
         Output axes are in [-1, 1] and correspond to affective_space.AXES.
+        The commit integrates them as rate × dt. This function does not
+        scale by time.
         """
         import math
 

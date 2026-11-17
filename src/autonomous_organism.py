@@ -502,11 +502,13 @@ class InternalSimulationLoop:
             return False
         try:
             if hasattr(core, "step"):
+                # Imagined outcome is an event. Retention for this slice
+                # already ran in update_affect; do not integrate dt again.
                 core.step(
                     external_impulses=None,
                     recall_impulses={"vector": dict(recall_impulse), "intensity": 1.0, "source": "memory"},
                     internal_impulses={"vector": dict(internal_impulse), "intensity": 1.0, "source": "internal"},
-                    time_elapsed=max(1e-6, _f(dt, 1.0)),
+                    time_elapsed=0.0,
                 )
                 return True
             if hasattr(core, "apply_impulse"):
@@ -1301,27 +1303,50 @@ class AutonomousOrganismAgent:
 
         intensity = _clamp(_f(regulation.get("discharge_intensity", 0.0)), 0.0, 1.0)
         reduce_affect = _clamp(_f(regulation.get("reduce_affect", 0.0)), 0.0, 1.0)
-        pulse = {
-            "stress": -0.45 * reduce_affect,
-            "arousal": -0.35 * reduce_affect,
-            "stability": 0.30 * reduce_affect,
-        }
+        try:
+            dt_v = float(dt)
+        except (TypeError, ValueError):
+            dt_v = 0.0
+        if not math.isfinite(dt_v) or dt_v < 0.0:
+            dt_v = 0.0
+
+        # Acute negative feedback while the state norm is past capacity.
+        # 0.45 is the existing discharge fraction: at reduce_affect=1 it
+        # removes 45% of (axis - setpoint) per second. The sign is the
+        # deviation, so both sides of the setpoint move toward it. This is
+        # an impulse, not a second integration; update_affect owns time.
+        axes = dict(affect_snapshot.get("axes", {}) or {})
+        setpoints = dict(getattr(self.affective_core, "baseline_setpoint", {}) or {})
+        pulse: Dict[str, float] = {}
+        if dt_v > 0.0 and reduce_affect > 0.0:
+            for axis, value in axes.items():
+                deviation = _f(value, 0.0) - _f(setpoints.get(axis, 0.0), 0.0)
+                if deviation == 0.0:
+                    continue
+                pulse[str(axis)] = -0.45 * reduce_affect * deviation * dt_v
 
         applied = False
-        try:
-            if hasattr(self.affective_core, "step"):
-                self.affective_core.step(
-                    external_impulses=None,
-                    recall_impulses=None,
-                    internal_impulses={"vector": dict(pulse), "intensity": max(0.1, intensity), "source": "regulation"},
-                    time_elapsed=max(1e-6, _f(dt, 1.0)),
-                )
-                applied = True
-            elif hasattr(self.affective_core, "apply_impulse"):
-                self.affective_core.apply_impulse({"vector": dict(pulse), "intensity": max(0.1, intensity), "source": "regulation"})
-                applied = True
-        except Exception as err:
-            self._record_failure("affect_regulation_failed", {"reason": "exception", "error": str(err)})
+        if pulse:
+            payload = {
+                "vector": pulse,
+                "intensity": max(0.1, intensity),
+                "source": "internal",
+            }
+            try:
+                core = self.affective_core
+                if hasattr(core, "apply_impulses"):
+                    core.apply_impulses(internal_impulses=payload)
+                    applied = True
+                elif hasattr(core, "step"):
+                    core.step(
+                        external_impulses=None,
+                        recall_impulses=None,
+                        internal_impulses=payload,
+                        time_elapsed=0.0,
+                    )
+                    applied = True
+            except Exception as err:
+                self._record_failure("affect_regulation_failed", {"reason": "exception", "error": str(err)})
 
         self._last_regulation = {
             "regulation_active": True,
@@ -1334,16 +1359,44 @@ class AutonomousOrganismAgent:
         return dict(self._last_regulation)
 
     def update_affect(self, dt: float) -> None:
-        if hasattr(self.affective_core, "step"):
-            try:
-                self.affective_core.step(
-                    external_impulses=None,
-                    recall_impulses=None,
-                    internal_impulses=None,
-                    time_elapsed=max(1e-6, _f(dt, 1.0)),
-                )
-            except Exception:
-                pass
+        """Integrate affect once for this organism slice.
+
+        A cognitive commit of the same host interval leaves
+        ``affect_time_credit_s`` on the core. Those seconds are already
+        in the leak and the allostatic map; a body slice only spends the
+        credit and does not run the map again. Without a credit, this
+        call is the interval's single advance.
+        """
+        core = self.affective_core
+        if not hasattr(core, "step"):
+            return
+        try:
+            dt_v = max(0.0, _f(dt, 0.0))
+            credit = float(getattr(core, "affect_time_credit_s", 0.0) or 0.0)
+            if not math.isfinite(credit) or credit < 0.0:
+                credit = 0.0
+            if credit > 0.0:
+                if credit + 1e-8 >= dt_v:
+                    try:
+                        core.affect_time_credit_s = max(0.0, credit - dt_v)
+                    except Exception:
+                        pass
+                    return
+                dt_v = dt_v - credit
+                try:
+                    core.affect_time_credit_s = 0.0
+                except Exception:
+                    pass
+            if dt_v <= 1e-12:
+                return
+            core.step(
+                external_impulses=None,
+                recall_impulses=None,
+                internal_impulses=None,
+                time_elapsed=dt_v,
+            )
+        except Exception:
+            pass
 
     def update_memory_decay(self, dt: float) -> None:
         if not self.memory_system:

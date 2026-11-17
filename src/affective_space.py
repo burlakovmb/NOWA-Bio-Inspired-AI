@@ -549,6 +549,9 @@ class AffectiveSpace:
     last_noise_sigma: Dict[str, float] = field(default_factory=dict)
     last_external_mean_impulse: float = 0.0
     dynamic_norm_cap: Optional[float] = None
+    # Seconds of this host interval already integrated by the cognitive commit.
+    # Body slices of the same interval must not integrate them again.
+    affect_time_credit_s: float = 0.0
 
     def __post_init__(self) -> None:
         if self.rng is None:
