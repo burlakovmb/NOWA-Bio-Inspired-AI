@@ -28,7 +28,7 @@ English: [issue-54-affect-simulated-time.en.md](issue-54-affect-simulated-time.e
 | `baseline` | Медленный аллостатический уровень |
 | `baseline_setpoint` (`b0`) | Фиксированный якорь личности; копия `baseline` при создании; **нового гена нет** |
 
-`baseline_adapt_rate` — **за симулированную секунду**. Дефолт `1/(6×3600) ≈ 4,63×10⁻⁵` (τ ≈ 6 ч к «прожитой» оси). Ген `af_baseline_adapt_rate`: диапазон `[0, 0.01]`, дефолт и сигма вдвое меньше старого пошагового (см. таблицу в [SPEC_A_GenomeVector.ru.md](../SPEC_A_GenomeVector.ru.md)).
+`baseline_adapt_rate` — **за симулированную секунду**. Дефолт `1/(6×3600) ≈ 4,63×10⁻⁵` (τ ≈ 6 ч к «прожитой» оси). Ген `af_baseline_adapt_rate`: диапазон `[1/86400, 1/5400]` (τ ≈ 1,5–24 ч), дефолт и сигма вдвое меньше старого пошагового (см. таблицу в [SPEC_A_GenomeVector.ru.md](../SPEC_A_GenomeVector.ru.md); issue #74 — [issue-74-gene-range.ru.md](issue-74-gene-range.ru.md)).
 
 Возврат `baseline` к `b0` с коэффициентом `0,25 × baseline_adapt_rate` (τ ≈ 24 ч). При хроническом стрессе ось и baseline выходят в равновесие, где baseline примерно на **80%** пути от `b0` к устойчивому отклонению оси (набор аллостатической нагрузки во сне не ускоряется).
 
@@ -61,6 +61,8 @@ English: [issue-54-affect-simulated-time.en.md](issue-54-affect-simulated-time.e
 `baseline_setpoint` пишется в блок аффекта. Без ключа при загрузке по каждой оси берётся загруженный `baseline` (`AgentStorage`, `tests/test_affective_time.py::test_setpoint_roundtrip_and_missing_field`).
 
 **Совместимость:** Старые сохранения с `baseline_adapt_rate = 0.002` читаются как **за секунду** (τ ≈ 8 мин), не за решение.
+
+**С issue #74 (PR #81):** Значения вне диапазона в словаре генома и в `.nowa` (в т.ч. legacy `0.002`) при загрузке **зажимаются** в `[1/86400, 1/5400]` (`GenomeVector.from_dict`, `AgentStorage.load_agent`) с одним `RuntimeWarning`; например `0.002` → max `1/5400` (τ ≈ 1,5 ч), а не τ ≈ 8 мин. См. [issue-74-gene-range.ru.md](issue-74-gene-range.ru.md).
 
 ---
 

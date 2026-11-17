@@ -1,8 +1,10 @@
 import json
 import os
+import warnings
 from datetime import datetime
 
 from affect import AffectiveState
+from genome import GENE_REGISTRY
 from state_codec import (
     AGENT_STATE_FORMAT,
     AGENT_STATE_SCHEMA_VERSION,
@@ -795,9 +797,26 @@ class AgentStorage:
                     affective_space.lambda_reg = float(
                         getattr(restored, "lambda_reg", getattr(affective_space, "lambda_reg", 0.05))
                     )
-                    affective_space.baseline_adapt_rate = float(
-                        getattr(restored, "baseline_adapt_rate", getattr(affective_space, "baseline_adapt_rate", 1.0 / (6.0 * 3600.0)))
+                    rate_gene = GENE_REGISTRY["af_baseline_adapt_rate"]
+                    raw_rate = float(
+                        getattr(
+                            restored,
+                            "baseline_adapt_rate",
+                            getattr(affective_space, "baseline_adapt_rate", rate_gene.default),
+                        )
                     )
+                    clamped_rate = max(rate_gene.min_val, min(rate_gene.max_val, raw_rate))
+                    affective_space.baseline_adapt_rate = clamped_rate
+                    if raw_rate != clamped_rate:
+                        warnings.warn(
+                            (
+                                "affective_space.baseline_adapt_rate value "
+                                f"{raw_rate} is out of range "
+                                f"[{rate_gene.min_val}, {rate_gene.max_val}] and was clamped."
+                            ),
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
                     affective_space.norm_cap_base = float(
                         getattr(restored, "norm_cap_base", getattr(affective_space, "norm_cap_base", 1.5))
                     )
