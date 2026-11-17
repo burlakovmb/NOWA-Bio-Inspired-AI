@@ -28,7 +28,7 @@ A step of length `dt` applies `m ** dt` toward the moving baseline. At `dt = 1` 
 | `baseline` | Slow allostatic level; tracks sustained axis offset |
 | `baseline_setpoint` (`b0`) | Fixed personality anchor; copied from `baseline` at construction; **no new genome gene** |
 
-`baseline_adapt_rate` is **per simulated second**. Default `1/(6×3600) ≈ 4.63×10⁻⁵` (τ ≈ 6 h toward the lived axis). Gene `af_baseline_adapt_rate`: range `[0, 0.01]`, default and sigma halved vs the old per-step default (see genome table in [SPEC_A_GenomeVector.en.md](../SPEC_A_GenomeVector.en.md)).
+`baseline_adapt_rate` is **per simulated second**. Default `1/(6×3600) ≈ 4.63×10⁻⁵` (τ ≈ 6 h toward the lived axis). Gene `af_baseline_adapt_rate`: range `[1/86400, 1/5400]` (τ ≈ 1.5–24 h), default and sigma halved vs the old per-step default (see genome table in [SPEC_A_GenomeVector.en.md](../SPEC_A_GenomeVector.en.md); issue #74 in [issue-74-gene-range.en.md](issue-74-gene-range.en.md)).
 
 Recovery of `baseline` toward `b0` uses `0.25 × baseline_adapt_rate` (τ ≈ 24 h). Under chronic stress, axis and baseline equilibrate with baseline roughly **80%** of the way from `b0` toward the sustained axis deviation (allostatic load does not accelerate while asleep).
 
@@ -61,6 +61,8 @@ During consolidation cycles, `AffectiveSpace.step(..., asleep=True)`:
 `baseline_setpoint` is stored in the affective block. If the key is missing on load, each axis falls back to the loaded `baseline` for that axis (`AgentStorage` / `tests/test_affective_time.py::test_setpoint_roundtrip_and_missing_field`).
 
 **Backward compatibility:** Saves that store the old default `baseline_adapt_rate = 0.002` are interpreted as **per second** (τ ≈ 8 min), not per decision.
+
+**Since issue #74 (PR #81):** Out-of-range values in genome dicts and in `.nowa` (including legacy `0.002`) are **clamped** to `[1/86400, 1/5400]` on load (`GenomeVector.from_dict`, `AgentStorage.load_agent`) with one `RuntimeWarning`; e.g. `0.002` becomes max `1/5400` (τ ≈ 1.5 h), not τ ≈ 8 min. See [issue-74-gene-range.en.md](issue-74-gene-range.en.md).
 
 ---
 
