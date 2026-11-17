@@ -73,7 +73,16 @@ def _build_gene_registry() -> "OrderedDict[str, GeneDescriptor]":
         ("af_decay_attachment", "affective_space", 0.85, 0.99, 0.93, 0.02, "Attachment inertia"),
         ("af_lambda_reg", "affective_space", 0.01, 0.10, 0.05, 0.01, "Homeostatic return strength"),
         # Same value as affective_space.DEFAULT_BASELINE_ADAPT_RATE (tau = 6 h).
-        ("af_baseline_adapt_rate", "affective_space", 0.0, 0.01, 1.0 / (6.0 * 3600.0), 0.5 / (6.0 * 3600.0), "Allostatic rate per second"),
+        # Bounds are default/4 .. default*4: tau 24 h .. 1.5 h.
+        (
+            "af_baseline_adapt_rate",
+            "affective_space",
+            1.0 / (24.0 * 3600.0),
+            1.0 / (1.5 * 3600.0),
+            1.0 / (6.0 * 3600.0),
+            0.5 / (6.0 * 3600.0),
+            "Allostatic rate per second",
+        ),
         # WK group: wakefulness
         ("wk_circadian_amplitude", "wakefulness", 0.1, 0.5, 0.3, 0.05, "Circadian rhythm amplitude"),
         ("wk_circadian_phase", "wakefulness", -1.57, 1.57, 0.0, 0.30, "Chronotype phase shift"),

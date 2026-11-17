@@ -1,7 +1,10 @@
 """Time-correct affective dynamics: decay**dt, impulse/advance split, b0."""
 
 import json
+import random
 from pathlib import Path
+
+import pytest
 
 from affective_space import (
     AXES,
@@ -9,6 +12,7 @@ from affective_space import (
     AffectiveSpace,
     EmotionalImpulse,
 )
+from genome import GENE_REGISTRY
 from agent import Agent
 from cortex import CortexMemory
 from hippocampus import NOWAHippocampus
@@ -260,3 +264,22 @@ def test_sleep_affective_time_sums_to_the_real_duration():
     manager.affective_space = direct
     manager.sleep_cycle()
     assert direct.calls == [(SECONDS_PER_SLEEP_CYCLE, True)]
+
+
+def test_fed_space_at_max_adapt_rate_keeps_stress_baseline_near_setpoint():
+    # Full Agent.step is the cognitive loop, and satiety is a host drive.
+    # The fastest legal gene rate is the worst case for a 300 s drift.
+    rate = GENE_REGISTRY["af_baseline_adapt_rate"].max_val
+    space = AffectiveSpace(
+        axes={"stress": 0.0},
+        baseline={"stress": 0.0},
+        baseline_setpoint={"stress": 0.0},
+        baseline_adapt_rate=rate,
+        legacy_compat_weight=0.0,
+        rng=random.Random(74),
+    )
+    assert space.baseline_adapt_rate == pytest.approx(rate)
+    dt = 0.25
+    for _ in range(int(300.0 / dt)):
+        space.step(time_elapsed=dt)
+    assert abs(space.baseline["stress"] - space.baseline_setpoint["stress"]) <= 0.05

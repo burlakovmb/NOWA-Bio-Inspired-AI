@@ -222,3 +222,52 @@ def test_crossover_lineage_id_is_built_and_truncated():
     expected = f"{long_a}x{long_b}"[:64]
     assert child_a.lineage_id == expected
     assert child_b.lineage_id == expected
+
+
+def _assert_baseline_adapt_tau(rate: float) -> None:
+    tau_s = 1.0 / rate
+    assert 1.5 * 3600.0 - 1e-6 <= tau_s <= 24.0 * 3600.0 + 1e-6
+
+
+def test_af_baseline_adapt_rate_random_mutate_crossover_stay_on_hour_scale():
+    gene = GENE_REGISTRY["af_baseline_adapt_rate"]
+    assert gene.default == pytest.approx(1.0 / (6.0 * 3600.0))
+    assert gene.min_val == pytest.approx(gene.default / 4.0)
+    assert gene.max_val == pytest.approx(gene.default * 4.0)
+    assert gene.sigma == pytest.approx(0.5 / (6.0 * 3600.0))
+
+    rng = random.Random(74)
+    for _ in range(1000):
+        _assert_baseline_adapt_tau(GenomeVector.random(rng).genes["af_baseline_adapt_rate"])
+
+    chain = GenomeVector.random(random.Random(7401))
+    chain_rng = random.Random(7402)
+    for step in range(200):
+        scale = 5.0 if step % 2 == 0 else 1.0
+        chain = chain.mutate(rate=1.0, sigma_scale=scale, rng=chain_rng)
+        _assert_baseline_adapt_tau(chain.genes["af_baseline_adapt_rate"])
+        other = GenomeVector.random(chain_rng)
+        mode = "sbx" if step % 2 == 0 else "arithmetic"
+        child_a, child_b = chain.crossover(other, mode=mode, rng=chain_rng)
+        _assert_baseline_adapt_tau(child_a.genes["af_baseline_adapt_rate"])
+        _assert_baseline_adapt_tau(child_b.genes["af_baseline_adapt_rate"])
+        chain = child_a
+
+
+def test_from_dict_clamps_legacy_baseline_adapt_rate():
+    payload = {
+        "generation": 3,
+        "lineage_id": "legacy",
+        "genes": dict(GenomeVector.default().genes),
+    }
+    payload["genes"]["af_baseline_adapt_rate"] = 0.002
+
+    with pytest.warns(RuntimeWarning, match="af_baseline_adapt_rate") as recorded:
+        genome = GenomeVector.from_dict(payload)
+
+    assert len(recorded) == 1
+    assert genome.generation == 3
+    assert genome.lineage_id == "legacy"
+    assert genome.genes["af_baseline_adapt_rate"] == pytest.approx(
+        GENE_REGISTRY["af_baseline_adapt_rate"].max_val
+    )
