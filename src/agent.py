@@ -379,6 +379,10 @@ class Agent:
         # Decay affect and the labile tier on host time.
         step_elapsed = 1.0
         time_elapsed = self._advance_host_clock(dt, wall_fallback=dt is None)
+        # Omitted dt falls back to the wall gap. Neuromodulators stay on the
+        # phase-2 one-second step in that case; an explicit sim dt is the
+        # interval cortisol and the field actually integrate.
+        self._nm_use_host_dt = dt is not None
         
         # Update wakefulness during waking period
         self.wakefulness.update_waking()
@@ -1151,12 +1155,22 @@ class Agent:
         )
         try:
             if hasattr(self, "neuromodulators") and self.neuromodulators is not None:
+                if getattr(self, "_nm_use_host_dt", False):
+                    try:
+                        nm_dt = float(time_elapsed if time_elapsed is not None else step_elapsed)
+                    except (TypeError, ValueError):
+                        nm_dt = 1.0
+                    if not math.isfinite(nm_dt) or nm_dt < 0.0:
+                        nm_dt = 0.0
+                else:
+                    nm_dt = 1.0
                 self.neuromodulators.update_from_signals(
                     reward=reward,
                     novelty=novelty,
                     conflict=conflict,
                     stable_repetition=stable_repetition,
                     use_reward_for_dopamine=False,
+                    dt=nm_dt,
                 )
                 ach_snapshot_for_step = float(getattr(self.neuromodulators, "acetylcholine", 0.0))
         except Exception:
