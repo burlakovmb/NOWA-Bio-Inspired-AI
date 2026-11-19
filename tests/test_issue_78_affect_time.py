@@ -199,3 +199,38 @@ def test_composed_tick_does_not_overdamp_an_unmet_need():
             runtime.organism_step(0.25)
     assert float(agent.affective_space.axes["stress"]) > 0.25
     assert float(agent.neuromodulators.cortisol) > 0.2
+
+
+def test_fed_sleep_clears_cortisol_and_does_not_secrete():
+    """Sleep moves the host clock with no appraisal.
+
+    Colony need-sleep zeros pending affect time and still commits. The
+    HPA dose tied to wakefulness must not fire, and the same clearance
+    that runs while awake must run for those seconds.
+    """
+    agent = _agent()
+    _commit(agent, 1.0, reward=0.2, conflict=0.0)
+    agent.wakefulness.wakefulness = 0.95
+    agent.neuromodulators.cortisol = 0.4
+    start = float(agent.neuromodulators.cortisol)
+    for _ in range(8):
+        agent.advance_time(1.0)
+        pending = agent._pending_commit_context
+        pending["time_elapsed"] = 0.0
+        pending["step_elapsed"] = 0.0
+        agent.commit_executed_transition(
+            "sleep",
+            reward=0.2,
+            context_events=["nest"],
+            conflict=0.0,
+            novelty=0.0,
+        )
+    slept = float(agent.neuromodulators.cortisol)
+    assert slept < start - 0.15
+    assert slept < 0.2
+
+    hungry = _agent()
+    before = float(hungry.neuromodulators.cortisol)
+    for _ in range(6):
+        _commit(hungry, 1.0, reward=-0.8, conflict=0.4)
+    assert float(hungry.neuromodulators.cortisol) > before + 0.2

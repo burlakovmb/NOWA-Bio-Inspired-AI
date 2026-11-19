@@ -1162,8 +1162,23 @@ class Agent:
                         nm_dt = 1.0
                     if not math.isfinite(nm_dt) or nm_dt < 0.0:
                         nm_dt = 0.0
+                    # Sleep advances the host clock and then commits with
+                    # time_elapsed=0 so affect is not integrated twice.
+                    # Those seconds still clear cortisol (same 0.6^dt map,
+                    # secretion 0). Waking appraisal time is not cleared twice.
+                    host_s = float(getattr(self, "_host_clock_s", 0.0))
+                    if hasattr(self, "_cort_integrated_s"):
+                        integrated_s = float(self._cort_integrated_s)
+                    else:
+                        integrated_s = host_s - nm_dt
+                    extra_s = host_s - integrated_s - nm_dt
+                    if extra_s > 1e-8 and hasattr(self.neuromodulators, "_integrate_cortisol"):
+                        self.neuromodulators._integrate_cortisol(0.0, extra_s)
+                    self._cort_integrated_s = host_s
                 else:
                     nm_dt = 1.0
+                    self._cort_integrated_s = float(getattr(self, "_host_clock_s", 0.0))
+                self._nm_appraisal_dt = nm_dt
                 self.neuromodulators.update_from_signals(
                     reward=reward,
                     novelty=novelty,
@@ -1372,8 +1387,17 @@ class Agent:
                         )
                 if hasattr(self, "wakefulness"):
                     deltas = self.wakefulness.get_neuromodulator_deltas()
+                    # The 0.01 coefficient is the one-second HPA dose at full
+                    # wakefulness. Sleep commits pass dt=0, so this drive is
+                    # off while clearance still runs.
+                    appraisal_dt = float(getattr(self, "_nm_appraisal_dt", 1.0))
+                    if not math.isfinite(appraisal_dt) or appraisal_dt < 0.0:
+                        appraisal_dt = 0.0
                     for key in ("dopamine", "cortisol", "norepinephrine", "serotonin"):
-                        impulses[key] = float(impulses.get(key, 0.0)) + float(deltas.get(key, 0.0))
+                        add = float(deltas.get(key, 0.0))
+                        if key == "cortisol":
+                            add *= appraisal_dt
+                        impulses[key] = float(impulses.get(key, 0.0)) + add
                 if impulses and hasattr(self.neuromodulators, "apply_impulses"):
                     self.neuromodulators.apply_impulses(impulses)
         except Exception:
