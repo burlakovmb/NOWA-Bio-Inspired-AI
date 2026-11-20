@@ -5,6 +5,7 @@
 [![License: PolyForm Strict 1.0.0](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-1f6feb)](https://polyformproject.org/licenses/strict/1.0.0)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![tests](https://img.shields.io/github/actions/workflow/status/burlakovmb/NOWA-Bio-Inspired-AI/tests.yml?branch=main&label=tests)](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/actions/workflows/tests.yml)
+[![alphaXiv-paper](https://img.shields.io/badge/alphaXiv-paper-b31b1b)](https://www.alphaxiv.org/abs/2611.nowa-reward-learning-evolutionary-growth)
 
 Source-available, not open source. Free for research and other non-commercial use under the [PolyForm Strict License 1.0.0](https://polyformproject.org/licenses/strict/1.0.0). Redistribution, modification, and commercial use need a separate license from the author ([@burlakovmb](https://github.com/burlakovmb)).
 
@@ -199,6 +200,21 @@ Subsystem verification protocols are given in [Docs/TESTING.en.md](Docs/TESTING.
 
 The English links above stay in English. The Russian text of the same documents is a separate file, linked from the top of each English page. [Docs/INDEX.en.md](Docs/INDEX.en.md) lists every English document in `Docs/` and in `Demo/*/Docs/`. Normative phase specifications are required when a module contract is changed. Laboratory reports of phase completion preserve the history of development and do not define the current state of the complex.
 
+### Paper
+
+The paper is on alphaXiv: [NOWA: Neural Networks with Reward-Based Learning and Evolutionary Architecture Growth](https://www.alphaxiv.org/abs/2611.nowa-reward-learning-evolutionary-growth).
+
+```bibtex
+@misc{burlakov2026nowa,
+  author       = {Burlakov, Mikhail},
+  title        = {{NOWA: Neural Networks with Reward-Based Learning and Evolutionary Architecture Growth}},
+  year         = {2026},
+  howpublished = {alphaXiv},
+  url          = {https://www.alphaxiv.org/abs/2611.nowa-reward-learning-evolutionary-growth},
+  note         = {Submitted 20 November 2026}
+}
+```
+
 ### License
 
 Source-available, not open source. Licensed under the [PolyForm Strict License 1.0.0](https://polyformproject.org/licenses/strict/1.0.0); the full text is in [LICENSE](LICENSE).
@@ -361,6 +377,21 @@ python src/gui.py
 ### Чтение
 
 Русские ссылки выше остаются в русских файлах. Английский текст тех же документов вынесен отдельно и указан в начале каждой русской страницы. [Docs/INDEX.ru.md](Docs/INDEX.ru.md) перечисляет каждый русский документ в `Docs/` и в `Demo/*/Docs/`. Нормативные спецификации фаз требуются при изменении контракта модуля. Лабораторные отчёты о завершении фаз сохраняют историю разработки и не задают актуальное состояние комплекса.
+
+### Статья
+
+Статья выложена на alphaXiv: [NOWA: Neural Networks with Reward-Based Learning and Evolutionary Architecture Growth](https://www.alphaxiv.org/abs/2611.nowa-reward-learning-evolutionary-growth).
+
+```bibtex
+@misc{burlakov2026nowa,
+  author       = {Burlakov, Mikhail},
+  title        = {{NOWA: Neural Networks with Reward-Based Learning and Evolutionary Architecture Growth}},
+  year         = {2026},
+  howpublished = {alphaXiv},
+  url          = {https://www.alphaxiv.org/abs/2611.nowa-reward-learning-evolutionary-growth},
+  note         = {Submitted 20 November 2026}
+}
+```
 
 ### Лицензия
 
