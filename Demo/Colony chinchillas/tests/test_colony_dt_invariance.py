@@ -577,10 +577,12 @@ def test_lifespan_factor_runner_matches_at_nominal_1x_and_10x() -> None:
             float(agent.age),
             int(agent.lived_steps),
             str(agent.mortality_system.cause_of_death),
-            id(agent.mortality_system),
+            agent.mortality_system,
         )
 
-    systems: list[int] = []
+    # Keep the objects. id() of a collected instance can be reused, so a
+    # list of bare ids is not a uniqueness check.
+    systems: list[object] = []
     for tag, genome, cap in cases:
         age_1x, steps_1x, cause_1x, system_1x = run(UI_DT_1X, f"{tag}-1x", genome, cap)
         age_10x, steps_10x, cause_10x, system_10x = run(UI_DT_10X, f"{tag}-10x", genome, cap)
@@ -590,7 +592,7 @@ def test_lifespan_factor_runner_matches_at_nominal_1x_and_10x() -> None:
         assert abs(age_1x - age_10x) <= SimulationRunner.MAX_TICK_DT + 1e-6
         assert steps_1x > steps_10x > 0
         systems.extend((system_1x, system_10x))
-    assert len(set(systems)) == len(systems)
+    assert len({id(system) for system in systems}) == len(systems)
 
 
 def test_newborn_lifespan_cap_follows_its_own_genome() -> None:

@@ -379,6 +379,10 @@ class Agent:
         # Decay affect and the labile tier on host time.
         step_elapsed = 1.0
         time_elapsed = self._advance_host_clock(dt, wall_fallback=dt is None)
+        # Omitted dt falls back to the wall gap. Neuromodulators stay on the
+        # phase-2 one-second step in that case; an explicit sim dt is the
+        # interval cortisol and the field actually integrate.
+        self._nm_use_host_dt = dt is not None
         
         # Update wakefulness during waking period
         self.wakefulness.update_waking()
@@ -1151,12 +1155,37 @@ class Agent:
         )
         try:
             if hasattr(self, "neuromodulators") and self.neuromodulators is not None:
+                if getattr(self, "_nm_use_host_dt", False):
+                    try:
+                        nm_dt = float(time_elapsed if time_elapsed is not None else step_elapsed)
+                    except (TypeError, ValueError):
+                        nm_dt = 1.0
+                    if not math.isfinite(nm_dt) or nm_dt < 0.0:
+                        nm_dt = 0.0
+                    # Sleep advances the host clock and then commits with
+                    # time_elapsed=0 so affect is not integrated twice.
+                    # Those seconds still clear cortisol (same 0.6^dt map,
+                    # secretion 0). Waking appraisal time is not cleared twice.
+                    host_s = float(getattr(self, "_host_clock_s", 0.0))
+                    if hasattr(self, "_cort_integrated_s"):
+                        integrated_s = float(self._cort_integrated_s)
+                    else:
+                        integrated_s = host_s - nm_dt
+                    extra_s = host_s - integrated_s - nm_dt
+                    if extra_s > 1e-8 and hasattr(self.neuromodulators, "_integrate_cortisol"):
+                        self.neuromodulators._integrate_cortisol(0.0, extra_s)
+                    self._cort_integrated_s = host_s
+                else:
+                    nm_dt = 1.0
+                    self._cort_integrated_s = float(getattr(self, "_host_clock_s", 0.0))
+                self._nm_appraisal_dt = nm_dt
                 self.neuromodulators.update_from_signals(
                     reward=reward,
                     novelty=novelty,
                     conflict=conflict,
                     stable_repetition=stable_repetition,
                     use_reward_for_dopamine=False,
+                    dt=nm_dt,
                 )
                 ach_snapshot_for_step = float(getattr(self.neuromodulators, "acetylcholine", 0.0))
         except Exception:
@@ -1358,8 +1387,17 @@ class Agent:
                         )
                 if hasattr(self, "wakefulness"):
                     deltas = self.wakefulness.get_neuromodulator_deltas()
+                    # The 0.01 coefficient is the one-second HPA dose at full
+                    # wakefulness. Sleep commits pass dt=0, so this drive is
+                    # off while clearance still runs.
+                    appraisal_dt = float(getattr(self, "_nm_appraisal_dt", 1.0))
+                    if not math.isfinite(appraisal_dt) or appraisal_dt < 0.0:
+                        appraisal_dt = 0.0
                     for key in ("dopamine", "cortisol", "norepinephrine", "serotonin"):
-                        impulses[key] = float(impulses.get(key, 0.0)) + float(deltas.get(key, 0.0))
+                        add = float(deltas.get(key, 0.0))
+                        if key == "cortisol":
+                            add *= appraisal_dt
+                        impulses[key] = float(impulses.get(key, 0.0)) + add
                 if impulses and hasattr(self.neuromodulators, "apply_impulses"):
                     self.neuromodulators.apply_impulses(impulses)
         except Exception:
@@ -1405,22 +1443,39 @@ class Agent:
         # Update affective space (Phase 4 pre) - no action influence
         try:
             space_inputs = affective_inputs
+            affect_dt = time_elapsed if time_elapsed is not None else step_elapsed
+            try:
+                affect_dt = float(affect_dt)
+            except (TypeError, ValueError):
+                affect_dt = 0.0
+            if not math.isfinite(affect_dt) or affect_dt < 0.0:
+                affect_dt = 0.0
             if space_inputs is None:
-                space_inputs = self._derive_affective_space_inputs(
+                # Appraisal is a drive: change per second. The axis moves by
+                # the integral over this tick. At dt=1 the kick matches the
+                # legacy one-second step.
+                derived = self._derive_affective_space_inputs(
                     reward=reward,
                     novelty=novelty,
                     conflict=conflict,
                     intensity=intensity,
                 )
+                space_inputs = {
+                    str(key): float(value) * affect_dt
+                    for key, value in dict(derived or {}).items()
+                }
             self.affective_space.step(
                 inputs=space_inputs,
                 recall_impulses=getattr(self, "_pending_recall_impulses", None) or [],
-                time_elapsed=time_elapsed if time_elapsed is not None else step_elapsed,
+                time_elapsed=affect_dt,
                 wakefulness=self.wakefulness.wakefulness,
                 uncertainty=novelty,
                 conflict=conflict,
                 background=getattr(self.affective_background, "snapshot", lambda: {})(),
             )
+            # One physiological interval. Later body slices of this same
+            # host dt must not run retention a second time.
+            self.affective_space.affect_time_credit_s = affect_dt
             self._pending_recall_impulses = []
             self._project_legacy_affect_from_affective_space(blend=1.0)
             try:
@@ -4158,9 +4213,11 @@ class Agent:
 
     def _derive_affective_space_inputs(self, reward: float, novelty: float, conflict: float, intensity: float) -> dict:
         """
-        Derive canonical affective-core impulse vector from current signals.
+        Derive the per-second affective drive from the current signals.
 
         Output axes are in [-1, 1] and correspond to affective_space.AXES.
+        The commit integrates them as rate × dt. This function does not
+        scale by time.
         """
         import math
 

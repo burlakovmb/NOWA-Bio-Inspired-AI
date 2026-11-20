@@ -98,8 +98,8 @@ class TestNeuromodulatorsPhase2(unittest.TestCase):
         expected_da = max(0.0, initial_da - 0.10 * abs(-0.8))
         self.assertAlmostEqual(self.nm.dopamine, expected_da, places=5)
         
-        # Cortisol should increase a lot
-        # CORT += 0.20 * abs(reward) + 0.25 * effective_conflict
+        # One-second map (dt defaults to 1): clearance 0.4 toward baseline,
+        # then the full legacy dose 0.20*|reward| + 0.25*effective_conflict.
         self.assertGreater(self.nm.cortisol, initial_cort, "Cortisol should increase with negative reward and conflict")
         expected_cort = initial_cort
         expected_cort += self.nm.ACC_CORT_HOMEOSTATIC_DECAY * (self.nm.BASELINE_CORT - initial_cort)
@@ -364,6 +364,75 @@ class TestNeuromodulatorsPhase2(unittest.TestCase):
         self.assertAlmostEqual(self.nm.cortisol, 0.05)
         
         print("✓ Reset to baseline working\n")
+
+
+    def test_cortisol_one_second_matches_two_half_seconds(self):
+        """Constant secretion: one step of 1 s equals two steps of 0.5 s."""
+        reward = -0.8
+
+        def fresh():
+            return NeuromodulatorState()
+
+        full = fresh()
+        full.update_from_signals(
+            reward=reward, novelty=0.0, conflict=0.0, dt=1.0, use_reward_for_dopamine=False
+        )
+        halves = fresh()
+        for _ in range(2):
+            halves.update_from_signals(
+                reward=reward, novelty=0.0, conflict=0.0, dt=0.5, use_reward_for_dopamine=False
+            )
+        self.assertAlmostEqual(full.cortisol, halves.cortisol, places=9)
+
+        initial = fresh().cortisol
+        legacy = initial
+        legacy += self.nm.ACC_CORT_HOMEOSTATIC_DECAY * (self.nm.BASELINE_CORT - initial)
+        legacy += self.nm.CORT_REWARD_NEGATIVE * abs(reward)
+        self.assertAlmostEqual(full.cortisol, legacy, places=9)
+
+    def test_cortisol_steady_level_does_not_depend_on_dt(self):
+        """Same simulated time and a constant negative outcome share one level."""
+        reward = -0.8
+        horizon = 24.0
+        levels = []
+        for dt in (0.25, 0.5, 1.0, 1.25):
+            nm = NeuromodulatorState()
+            steps = int(round(horizon / dt))
+            for _ in range(steps):
+                nm.update_from_signals(
+                    reward=reward,
+                    novelty=0.0,
+                    conflict=0.0,
+                    dt=dt,
+                    use_reward_for_dopamine=False,
+                )
+            levels.append(nm.cortisol)
+        secretion = self.nm.CORT_REWARD_NEGATIVE * abs(reward)
+        expected = self.nm.BASELINE_CORT + (secretion / self.nm.ACC_CORT_HOMEOSTATIC_DECAY)
+        for level in levels:
+            self.assertAlmostEqual(level, expected, places=5)
+        self.assertAlmostEqual(max(levels), min(levels), places=5)
+
+    def test_four_quarter_seconds_are_not_four_full_cortisol_doses(self):
+        reward = -0.8
+
+        def level(dt, steps):
+            nm = NeuromodulatorState()
+            for _ in range(steps):
+                nm.update_from_signals(
+                    reward=reward,
+                    novelty=0.0,
+                    conflict=0.0,
+                    dt=dt,
+                    use_reward_for_dopamine=False,
+                )
+            return nm.cortisol
+
+        one_second = level(1.0, 1)
+        four_quarters = level(0.25, 4)
+        four_seconds = level(1.0, 4)
+        self.assertAlmostEqual(four_quarters, one_second, places=9)
+        self.assertLess(four_quarters, four_seconds - 0.05)
 
 
 class TestNeuromodulatorsWithAgentContext(unittest.TestCase):

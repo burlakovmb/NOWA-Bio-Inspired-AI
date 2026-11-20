@@ -521,6 +521,52 @@ class NeuromodulatorState:
         self._sync_field_from_state()
         self._track_ach_running_mean()
 
+    def _integrate_cortisol(self, secretion: float, dt: float) -> None:
+        """First-order HPA step. One second reproduces the legacy map.
+
+        Clearance keeps a fraction ``(1 - ACC_CORT_HOMEOSTATIC_DECAY) ** dt``
+        of the excess over baseline (0.6 ** dt with the phase-2 coefficient).
+        ``secretion`` is the legacy one-second dose. Over ``dt`` the delivered
+        dose is that amount times ``(1 - retain ** dt) / (1 - retain)``, the
+        integral of a constant rate against the same clearance. At ``dt=1``
+        this is exactly ``excess *= 0.6`` plus the full dose. The steady
+        level ``baseline + secretion / pull`` does not depend on ``dt``,
+        and one step of ``dt`` matches two steps of ``dt/2``.
+        """
+        try:
+            dt_v = float(dt)
+        except (TypeError, ValueError):
+            dt_v = 0.0
+        if not math.isfinite(dt_v) or dt_v <= 0.0:
+            return
+        try:
+            secretion_v = float(secretion)
+        except (TypeError, ValueError):
+            secretion_v = 0.0
+        if not math.isfinite(secretion_v):
+            secretion_v = 0.0
+        try:
+            pull = float(self.ACC_CORT_HOMEOSTATIC_DECAY)
+        except (TypeError, ValueError):
+            pull = 0.0
+        if not math.isfinite(pull) or pull < 0.0:
+            pull = 0.0
+        baseline = float(self.BASELINE_CORT)
+        current = float(self.cortisol)
+        if dt_v == 1.0:
+            self.cortisol = current + (pull * (baseline - current)) + secretion_v
+            return
+        if pull == 0.0:
+            self.cortisol = current + (secretion_v * dt_v)
+            return
+        retain = 1.0 - pull
+        if retain <= 0.0:
+            self.cortisol = current + ((pull * (baseline - current)) + secretion_v) * dt_v
+            return
+        kept = math.exp(dt_v * math.log(retain))
+        delivered = (1.0 - kept) / pull
+        self.cortisol = baseline + ((current - baseline) * kept) + (secretion_v * delivered)
+
     def update_from_signals(
         self,
         reward: float = 0.0,
@@ -544,7 +590,8 @@ class NeuromodulatorState:
             stable_repetition: Whether experiencing stable repetition pattern
             cognitive_conflict: Optional ACC cognitive conflict channel [0.0 to 1.0]
             affective_conflict: Optional ACC affective conflict channel [0.0 to 1.0]
-            dt: Time delta for ACC temporal smoothing dynamics
+            dt: Simulated seconds. ACC smoothing and cortisol clearance
+                both use it. At 1 the cortisol step is the legacy map.
         """
         combined_conflict_v, cognitive_conflict_v, affective_conflict_v = self._split_conflict_components(
             conflict=conflict,
@@ -625,12 +672,12 @@ class NeuromodulatorState:
 
         # Cortisol is a slower stress axis and is intentionally updated outside
         # the fast coupled interaction field (DA/5HT/NE/ACh).
-        # Cortisol: stress response and affectively modulated conflict contribution.
-        self.cortisol += self.ACC_CORT_HOMEOSTATIC_DECAY * (self.BASELINE_CORT - self.cortisol)
+        # Secretion is the legacy one-second dose. Clearance and the dose
+        # are integrated together over dt (see _integrate_cortisol).
+        secretion = self.CORT_CONFLICT * effective_conflict_affective
         if reward < 0:
-            self.cortisol += self.CORT_REWARD_NEGATIVE * abs(reward)
-
-        self.cortisol += self.CORT_CONFLICT * effective_conflict_affective
+            secretion += self.CORT_REWARD_NEGATIVE * abs(reward)
+        self._integrate_cortisol(secretion, dt)
 
         # Acetylcholine: novelty/selectivity modulation (Phase 6.1).
         ach_delta, next_trace = self._compute_acetylcholine_delta(
