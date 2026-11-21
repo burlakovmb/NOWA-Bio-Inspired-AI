@@ -2177,10 +2177,12 @@ class ChinchillaAgent(Agent):
         if self.is_sleeping or self.current_action == "sleep":
             return
 
-        if not self.resources.consume_food(
-            0.0003 * RESOURCE_CONSUMPTION_MULTIPLIER,
-            primary=self._food_primary_source(),
-        ):
+        # Bowls lose food and water only in _try_acquire_resource, when the
+        # animal actually eats or drinks. An empty bowl still costs energy
+        # and affect; being awake does not sip the shared stock.
+        pellets = max(0.0, float(self.resources.food_pellets))
+        hay = max(0.0, float(self.resources.hay))
+        if pellets + hay <= 0.0:
             self._apply_affect_impulse(stress=0.02, valence=-0.02, intensity=0.5)
             # Apply direct energy penalty when food is unavailable so that
             # resource scarcity affects physiology (can lead to death).
@@ -2190,11 +2192,7 @@ class ChinchillaAgent(Agent):
             except Exception:
                 pass
 
-        self.resources.water = max(
-            0.0,
-            self.resources.water - (0.0001 * RESOURCE_CONSUMPTION_MULTIPLIER),
-        )
-        if self.resources.water <= 0.0:
+        if float(self.resources.water) <= 0.0:
             self._apply_affect_impulse(stress=0.02, intensity=0.4)
             try:
                 penalty = WATER_MISSING_ENERGY_PENALTY_PER_S * float(RESOURCE_CONSUMPTION_MULTIPLIER)
