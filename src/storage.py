@@ -89,6 +89,17 @@ def _bind_restored_two_tier(agent, sleep_manager) -> None:
             pass
 
 
+def _agent_component(agent, explicit, attribute):
+    """Component for ``save_agent`` / ``load_agent``: the explicit argument, else ``agent``'s own.
+
+    Callers that pass only ``agent=`` get every component the agent holds.
+    The emotional stability argument maps to ``Agent.stability_monitor``.
+    """
+    if explicit is not None or agent is None:
+        return explicit
+    return getattr(agent, attribute, None)
+
+
 class AgentStorage:
     """Сохранение и загрузка состояния агента"""
     
@@ -101,13 +112,22 @@ class AgentStorage:
         """Сохранить состояние агента в файл"""
         if filename is None:
             filename = f"agent_save_{datetime.now().strftime('%Y%m%d_%H%M%S')}.nowa"
-        if value_layer is None and agent is not None and hasattr(agent, "value_layer"):
-            value_layer = getattr(agent, "value_layer", None)
-        if conflict_arbitration is None and agent is not None and hasattr(agent, "conflict_arbitration"):
-            conflict_arbitration = getattr(agent, "conflict_arbitration", None)
-        if intent_memory is None and agent is not None and hasattr(agent, "intent_memory"):
-            intent_memory = getattr(agent, "intent_memory", None)
-        
+        affect_state = _agent_component(agent, affect_state, "affect_state")
+        temporal = _agent_component(agent, temporal, "temporal")
+        sleep_manager = _agent_component(agent, sleep_manager, "sleep_manager")
+        neuromodulators = _agent_component(agent, neuromodulators, "neuromodulators")
+        affective_persistence = _agent_component(agent, affective_persistence, "affective_persistence")
+        affective_background = _agent_component(agent, affective_background, "affective_background")
+        affective_space = _agent_component(agent, affective_space, "affective_space")
+        semantic_emotions = _agent_component(agent, semantic_emotions, "semantic_emotions")
+        emotional_memory = _agent_component(agent, emotional_memory, "emotional_memory")
+        emotional_expectations = _agent_component(agent, emotional_expectations, "emotional_expectations")
+        emotional_regulation = _agent_component(agent, emotional_regulation, "emotional_regulation")
+        emotional_stability = _agent_component(agent, emotional_stability, "stability_monitor")
+        value_layer = _agent_component(agent, value_layer, "value_layer")
+        conflict_arbitration = _agent_component(agent, conflict_arbitration, "conflict_arbitration")
+        intent_memory = _agent_component(agent, intent_memory, "intent_memory")
+
         filepath = os.path.join(self.save_dir, filename)
         
         # Сохранить состояние в JSON с версией схемы.
@@ -489,13 +509,22 @@ class AgentStorage:
             supported_versions=(AGENT_STATE_SCHEMA_VERSION,),
         )
         _validate_agent_containers(agent_state)
-        if value_layer is None and agent is not None and hasattr(agent, "value_layer"):
-            value_layer = getattr(agent, "value_layer", None)
-        if conflict_arbitration is None and agent is not None and hasattr(agent, "conflict_arbitration"):
-            conflict_arbitration = getattr(agent, "conflict_arbitration", None)
-        if intent_memory is None and agent is not None and hasattr(agent, "intent_memory"):
-            intent_memory = getattr(agent, "intent_memory", None)
-        
+        affect_state = _agent_component(agent, affect_state, "affect_state")
+        temporal = _agent_component(agent, temporal, "temporal")
+        sleep_manager = _agent_component(agent, sleep_manager, "sleep_manager")
+        neuromodulators = _agent_component(agent, neuromodulators, "neuromodulators")
+        affective_persistence = _agent_component(agent, affective_persistence, "affective_persistence")
+        affective_background = _agent_component(agent, affective_background, "affective_background")
+        affective_space = _agent_component(agent, affective_space, "affective_space")
+        semantic_emotions = _agent_component(agent, semantic_emotions, "semantic_emotions")
+        emotional_memory = _agent_component(agent, emotional_memory, "emotional_memory")
+        emotional_expectations = _agent_component(agent, emotional_expectations, "emotional_expectations")
+        emotional_regulation = _agent_component(agent, emotional_regulation, "emotional_regulation")
+        emotional_stability = _agent_component(agent, emotional_stability, "stability_monitor")
+        value_layer = _agent_component(agent, value_layer, "value_layer")
+        conflict_arbitration = _agent_component(agent, conflict_arbitration, "conflict_arbitration")
+        intent_memory = _agent_component(agent, intent_memory, "intent_memory")
+
         # Восстановить данные
         hippocampus.experiences = agent_state["hippocampus_experiences"]
         decision = agent_state.get("hippocampus_decision")
@@ -716,8 +745,14 @@ class AgentStorage:
                                     pass
                         except Exception:
                             pass
-                # If caller provided sleep_manager or other place to attach, try to set
-                if sleep_manager is not None and hasattr(sleep_manager, 'neuromodulators'):
+                # If caller provided sleep_manager or other place to attach, try to set.
+                # Agent.__init__ shares one object between the agent and its sleep
+                # manager; that object is already restored above and is kept.
+                if (
+                    sleep_manager is not None
+                    and hasattr(sleep_manager, 'neuromodulators')
+                    and sleep_manager.neuromodulators is not neuromodulators
+                ):
                     try:
                         sleep_manager.neuromodulators = type(sleep_manager.neuromodulators).from_dict(nm_data)
                     except Exception:
@@ -1026,6 +1061,7 @@ class AgentStorage:
                     for attr_name in (
                         "window_size",
                         "hysteresis_windows",
+                        "baseline_warmup_samples",
                         "baseline_background",
                         "baseline_neuromodulators",
                         "weights",
@@ -1041,6 +1077,7 @@ class AgentStorage:
                         "_dominant_emotion_history",
                         "_dominant_intensity_history",
                         "_trigger_history",
+                        "_background_baseline_buffer",
                         "_hysteresis_counts",
                     ):
                         if hasattr(restored, attr_name):
