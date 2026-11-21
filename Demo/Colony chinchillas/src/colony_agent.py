@@ -150,6 +150,18 @@ ALARM_BUFFER_GAIN = 0.60
 ALARM_HABITUATION_RETAIN = 0.60
 ALARM_HABITUATION_FLOOR = 0.30
 ALARM_HABITUATION_TAU_S = 120.0
+# A fearful tone in the same zone is a weak, local cue, not a bark. Exposure
+# fades it toward 0.3 of the fresh gain over host seconds; quiet time restores
+# it. The clock is the tick dt, so 0.25 s and 1 s steps match over the same
+# interval. A neighbour in another zone does not count.
+FEAR_CONTAGION_CONFLICT = 0.1
+FEAR_CONTAGION_FLOOR = 0.3
+FEAR_CONTAGION_EXPOSURE_TAU_S = 120.0
+FEAR_CONTAGION_RECOVERY_TAU_S = 120.0
+# Food is not an exclusive lock. Crowding is another animal already eating in
+# this bowl zone. One extra eater, then the same again for each further one.
+BOWL_CROWD_CONFLICT = 0.15
+FOOD_BOWL_ZONES = frozenset({"bowl_pellets", "bowl_hay"})
 
 logger = logging.getLogger(__name__)
 
@@ -438,6 +450,10 @@ class ChinchillaAgent(Agent):
         self._alarm_emit_count: int = 0
         self._alarm_habituation: dict[str, tuple[float, float]] = {}
         self._alarm_heard: dict[str, int] = {}
+        # Per neighbour: (sensitivity, sim_time of the last update). Empty on
+        # a save that predates the field.
+        self._fear_contagion: dict[str, tuple[float, float]] = {}
+        self._alarm_heard_this_tick: bool = False
         self.unconditioned_reflexes: tuple[UnconditionedReflex, ...] = (
             self.behavior_profile.unconditioned_reflexes
         )
@@ -613,9 +629,9 @@ class ChinchillaAgent(Agent):
                 pass
         context_events = self._build_context_events()
         novelty = self._compute_novelty()
-        conflict = self._compute_conflict()
-        intensity = self._compute_intensity()
         host_dt = _host_dt(dt)
+        conflict = self._compute_conflict(host_dt)
+        intensity = self._compute_intensity()
         # One game dt per tick. step() moves the host clock; the paired
         # commit omits dt so the same tick is not counted twice. Ticks that
         # do not call step() advance the clock explicitly.
@@ -714,10 +730,8 @@ class ChinchillaAgent(Agent):
         if nearby_unknown:
             events.append("stranger_nearby")
 
-        for perceived in self.perceived_others:
-            if perceived.public_state.affect_tone == "fearful":
-                events.append("alarm_call")
-                break
+        if self._alarm_heard_this_tick:
+            events.append("alarm_call")
 
         if self.is_pregnant:
             events.append("pregnant")
@@ -772,15 +786,6 @@ class ChinchillaAgent(Agent):
     ) -> float:
         reward = 0.0
 
-        if self.resources:
-            food_level = self._food_availability()
-            if food_level > 0.5:
-                reward += 0.2
-            elif food_level < 0.15:
-                reward -= 0.4
-
-        # Valence is updated from reward. Feeding it back here is a loop.
-        reward -= self.stress * 0.3
         reward -= _clamp(self.hunger - 0.4, 0.0, 1.0) * 0.25
         reward -= _clamp(self.thirst - 0.35, 0.0, 1.0) * 0.35
         if before is not None:
@@ -964,13 +969,83 @@ class ChinchillaAgent(Agent):
             novelty += 0.4
         return min(1.0, novelty)
 
-    def _compute_conflict(self) -> float:
+    def _compute_conflict(self, host_dt: float = 0.0) -> float:
         conflict = 0.0
-        if any(p.public_state.affect_tone == "fearful" for p in self.perceived_others):
-            conflict += 0.3
-        if self.stress > 0.5:
-            conflict += self.stress * 0.3
+        exposed: set[str] = set()
+        for perceived in self.perceived_others:
+            if perceived.category != "contact":
+                continue
+            if perceived.public_state.affect_tone != "fearful":
+                continue
+            other_id = str(perceived.agent_id)
+            if other_id in exposed:
+                continue
+            exposed.add(other_id)
+            gain = self._fear_contagion_gain(other_id, host_dt, exposed=True)
+            conflict += FEAR_CONTAGION_CONFLICT * gain
+        for other_id in list(self._fear_contagion):
+            if other_id in exposed:
+                continue
+            self._fear_contagion_gain(other_id, host_dt, exposed=False)
+        conflict += self._bowl_crowd_conflict()
         return min(1.0, conflict)
+
+    def _fear_contagion_gain(self, other_id: str, host_dt: float, *, exposed: bool) -> float:
+        """Sensitivity to this neighbour's fearful tone.
+
+        Exposure moves the gain toward the floor. Quiet time moves it back
+        toward 1. Both use host seconds, so the result depends on the interval
+        and not on how many times the tick function ran.
+        """
+        sensitivity, _stamp = self._fear_contagion.get(other_id, (1.0, float(self.sim_time)))
+        try:
+            elapsed = float(host_dt)
+        except (TypeError, ValueError):
+            elapsed = 0.0
+        if not math.isfinite(elapsed) or elapsed < 0.0:
+            elapsed = 0.0
+        sensitivity = float(sensitivity)
+        if not math.isfinite(sensitivity):
+            sensitivity = 1.0
+        if exposed:
+            tau = FEAR_CONTAGION_EXPOSURE_TAU_S
+            if tau > 0.0 and elapsed > 0.0:
+                retained = math.exp(-elapsed / tau)
+                sensitivity = FEAR_CONTAGION_FLOOR + (sensitivity - FEAR_CONTAGION_FLOOR) * retained
+        else:
+            tau = FEAR_CONTAGION_RECOVERY_TAU_S
+            if tau > 0.0 and elapsed > 0.0:
+                retained = math.exp(-elapsed / tau)
+                sensitivity = 1.0 - (1.0 - sensitivity) * retained
+        sensitivity = min(1.0, max(FEAR_CONTAGION_FLOOR, sensitivity))
+        self._fear_contagion[str(other_id)] = (sensitivity, float(self.sim_time))
+        return sensitivity
+
+    def _bowl_crowd_conflict(self) -> float:
+        """Conflict from extra animals eating in this bowl zone.
+
+        Pellets and hay are separate zones. An eater is an animal whose
+        current action is eat while it stands in that zone. The first eater
+        adds nothing; each further one adds ``BOWL_CROWD_CONFLICT``.
+        """
+        zone = str(self.position)
+        if zone not in FOOD_BOWL_ZONES:
+            return 0.0
+        claimants = 0
+        saw_self = False
+        for other in self.colony:
+            if other is self:
+                saw_self = True
+            if str(getattr(other, "position", "")) != zone:
+                continue
+            if str(getattr(other, "current_action", "")) != "eat":
+                continue
+            claimants += 1
+        if not saw_self and str(self.current_action) == "eat":
+            claimants += 1
+        if claimants <= 1:
+            return 0.0
+        return BOWL_CROWD_CONFLICT * float(claimants - 1)
 
     def _compute_intensity(self) -> float:
         return min(2.0, 0.5 + self.arousal + abs(self.valence) * 0.5)
@@ -1420,6 +1495,7 @@ class ChinchillaAgent(Agent):
         self._perceive_alarm_calls()
 
     def _perceive_alarm_calls(self) -> None:
+        self._alarm_heard_this_tick = False
         now = float(self.sim_time)
         for other in self.colony:
             if other is self or not other._is_emitting_alarm():
@@ -1431,6 +1507,7 @@ class ChinchillaAgent(Agent):
             if self._alarm_heard.get(other.agent_id) == event_id:
                 continue
             self._alarm_heard[other.agent_id] = event_id
+            self._alarm_heard_this_tick = True
             known = self.knowledge.get(other.agent_id)
             base = ALARM_KNOWN_STRESS if known is not None else ALARM_UNKNOWN_STRESS
             scale = self._alarm_caller_gain(other.agent_id, now)
@@ -1545,6 +1622,10 @@ class ChinchillaAgent(Agent):
                 for key, (sens, stamp) in self._alarm_habituation.items()
             },
             "heard": {str(key): int(value) for key, value in self._alarm_heard.items()},
+            "fear_contagion": {
+                str(key): [float(sens), float(stamp)]
+                for key, (sens, stamp) in self._fear_contagion.items()
+            },
         }
 
     def _restore_alarm_state(self, payload: object) -> None:
@@ -1577,6 +1658,14 @@ class ChinchillaAgent(Agent):
             for key, value in raw_heard.items():
                 heard[str(key)] = max(0, int(_coerce_finite(value, 0.0)))
         self._alarm_heard = heard
+        contagion: dict[str, tuple[float, float]] = {}
+        raw_tone = payload.get("fear_contagion")
+        if isinstance(raw_tone, dict):
+            for key, item in raw_tone.items():
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    sens = min(1.0, max(FEAR_CONTAGION_FLOOR, _coerce_finite(item[0], 1.0)))
+                    contagion[str(key)] = (sens, _coerce_finite(item[1], 0.0))
+        self._fear_contagion = contagion
 
     def _advance_affect_while_asleep(self, host_dt: float) -> None:
         """One asleep affect interval for this tick.
