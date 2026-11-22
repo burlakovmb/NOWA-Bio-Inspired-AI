@@ -1,129 +1,148 @@
-# Issue #80 — colony food economy (eat/drink-only bowl drain)
+# Issue #80 — colony food economy (bite at the bowl, walk to get there)
 
 Russian: [issue-80-colony-food-economy.ru.md](issue-80-colony-food-economy.ru.md)
 
-PR #88, branch `team/issue-80-colony-food-economy`. Closes the Colony side of [issue #80](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/80). Related: [issue #74](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/74), [issue #56](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/56) (action duration — **out of scope** here). Builds on alarm, affect, and contagion work ([issue-54-affect-simulated-time.en.md](issue-54-affect-simulated-time.en.md), [issue-78-affect-time.en.md](issue-78-affect-time.en.md), [issue-79-colony-contagion.en.md](issue-79-colony-contagion.en.md)).
+PR #88, branch `team/issue-80-colony-food-economy`. Product HEAD for this spec: `3479434`. Closes the Colony side of [issue #80](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/80). Related: [issue #74](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/74), [issue #56](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/56) (action **duration** — out of scope; **travel hold** here is phase 1 only). Builds on affect and contagion ([issue-54-affect-simulated-time.en.md](issue-54-affect-simulated-time.en.md), [issue-78-affect-time.en.md](issue-78-affect-time.en.md), [issue-79-colony-contagion.en.md](issue-79-colony-contagion.en.md)).
 
-Code (demo only): `Demo/Colony chinchillas/src/colony_agent.py`. Tests: `Demo/Colony chinchillas/tests/test_issue_80_food_economy.py`, `Demo/Colony chinchillas/tests/test_resources.py`. **`src/` is unchanged** — no core retuning for the demo.
+Code (demo): `Demo/Colony chinchillas/src/colony_agent.py`, `Demo/Colony chinchillas/src/shared_resources.py`. Tests: `test_issue_80_food_economy.py`, `test_issue_80_travel_goal.py`, `test_resources.py`. **PR commits do not edit `src/`** (strict biofidelity in core).
 
 ---
 
 ## 1. Problem
 
-Each simulated second, `_apply_metabolism_second` (called from `_resource_metabolism_step` when the per-agent metabolism accumulator reaches 1 s) ran for every **awake** agent and **unconditionally** reduced shared bowl levels:
+Each simulated second, `_apply_metabolism_second` used to debit shared bowls for every **awake** agent regardless of `eat` / `drink`:
 
-- **Food:** `consume_food(0.0003 * RESOURCE_CONSUMPTION_MULTIPLIER, …)` every second per waking agent.
-- **Water:** `water -= 0.0001 * RESOURCE_CONSUMPTION_MULTIPLIER` every second per waking agent.
+- **Food:** `consume_food(0.0003 * RESOURCE_CONSUMPTION_MULTIPLIER, …)` per second.
+- **Water:** `water -= 0.0001 * RESOURCE_CONSUMPTION_MULTIPLIER` per second.
 
-This drain did **not** depend on `eat` / `drink` actions, successful acquisition, or hunger/thirst above availability thresholds. Real bites already happen in `_try_acquire_resource` at `0.003 * RESOURCE_CONSUMPTION_MULTIPLIER` once per action tick.
-
-**Observed failure mode (issue #80, stress repro):** ~93% of measured food consumption was passive drain without eating; with **16 agents** the shared food bowl was empty ~54–65% of simulated time while refill cadence (`REFILL_DAY_S = 600` s in `config_colony.py` / `simulation_runner.py`) could not keep up. Animals accumulated hunger stress even when they were not at the bowl eating. That masked behavioural dynamics (crowding, policy, contagion) and made chronic hunger the dominant stress driver in colony runs (see also [issue-79-colony-contagion.en.md](issue-79-colony-contagion.en.md) §5 plateau note).
+With **16 agents**, bowls emptied far before `REFILL_DAY_S = 600` s; ~93% of measured consumption was passive drain without eating (issue #80 stress repro). Chronic hunger masked other colony dynamics.
 
 ---
 
-## 2. Solution (host only)
+## 2. Solution (host + shared consume API)
 
-All behaviour lives in `colony_agent.py`. Shared resource types and refill logic (`shared_resources.py`, `simulation_runner.py`, `config_colony.py`) are **unchanged** in this PR.
+### 2.1 No passive bowl debit (metabolism)
 
-### 2.1 Remove passive bowl debit from metabolism
-
-In `_apply_metabolism_second`, after hunger/thirst accumulation and critical thirst/hunger impulses, and after the early return for sleep:
+In `_apply_metabolism_second`, after hunger/thirst growth and critical impulses, and after sleep early-return:
 
 | Removed | Kept |
 | --- | --- |
-| Per-second `consume_food(0.0003 * …)` | Hunger/thirst growth (`HUNGER_ACCUMULATION_PER_S`, `THIRST_ACCUMULATION_PER_S`) |
-| Per-second `water -= 0.0001 * …` | Critical hunger/thirst affect impulses |
-| — | Early return when `is_sleeping` or `current_action == "sleep"` |
-| — | **Empty-bowl penalties:** if `pellets + hay <= 0`, affect + `RESOURCE_MISSING_ENERGY_PENALTY_PER_S`; if `water <= 0`, affect + `WATER_MISSING_ENERGY_PENALTY_PER_S` (both scaled by `RESOURCE_CONSUMPTION_MULTIPLIER`) |
+| Per-second `consume_food(0.0003 * …)` and `water -= 0.0001 * …` | Need accumulation, critical impulses, empty-bowl affect + energy penalties (`RESOURCE_MISSING_ENERGY_PENALTY_PER_S`, `WATER_MISSING_ENERGY_PENALTY_PER_S`) |
 
-Awake agents no longer sip shared stock by merely metabolizing.
+Bowls change only on successful acquisition (below). No spoilage; `REFILL_DAY_S` unchanged.
 
-### 2.2 Consumption only on successful eat/drink
+### 2.2 Variant B — eat and drink only at the station (strict bowl)
 
-Bowl levels drop **only** in `_try_acquire_resource`, unchanged portion size and once per invocation:
+**Food:** `_try_acquire_resource("food_pellets")` runs only when the agent stands in `bowl_pellets` or `bowl_hay`. It reads stock in **that** bowl (`_food_stock(here) > 0.05`), then:
 
-| Resource | Condition (summary) | Debit |
-| --- | --- | --- |
-| `food_pellets` | Not sleeping; optional physiology gate; availability > 0.05 | `consume_food(0.003 * RESOURCE_CONSUMPTION_MULTIPLIER, …)` + `EAT_RELIEF` on hunger |
-| `water` | Not sleeping; optional physiology gate; water > 0.02 | `water -= 0.003 * RESOURCE_CONSUMPTION_MULTIPLIER` + `DRINK_RELIEF` on thirst |
+```text
+consume_food(0.003 * RESOURCE_CONSUMPTION_MULTIPLIER, primary=here, strict=True)
+```
 
-`sim_step` still calls `_interpret_action` once per tick; `eat` and `drink` branches are mutually exclusive, so at most **one** acquire path runs per tick per agent.
+`strict=True` in `shared_resources.consume_food` takes **only** from `primary` (`food_pellets` or `hay`). The other bowl does **not** top up a failed bite. Walking elsewhere does not reduce hunger until a bowl step succeeds.
 
-**Explicit non-goals (this issue):**
+**Drink:** only at zone `waterer` (`position == "waterer"`); otherwise acquire returns `False` without moving water. One `0.003 * RESOURCE_CONSUMPTION_MULTIPLIER` debit per successful tick.
 
-- No spoilage / passive decay rate added.
-- `REFILL_DAY_S` not changed (`600.0`).
-- No changes to action duration (#56).
-- **`src/`** genome, appraisal, and hippocampus paths untouched (strict biofidelity).
+**Travel target for eat:** `_eat_travel_zone()` picks a bowl zone using `_food_primary_source()` (preference `_food_source_preference`, else the non-empty pool). Empty favorite sends the animal to the other bowl when that stock is above `0.05`; both empty → no walk target, “no food” impulse path.
 
-### 2.3 Biological meaning
+**Biological reading:** the animal eats from the dish under its feet and drinks at the waterer; shared stock is not a invisible colony-wide sip.
 
-Shared food and water represent a **physical bowl**. A chinchilla reduces that stock only when it **eats** or **drinks** at the bowl (host action + acquire), not by standing awake elsewhere. Hunger and thirst still rise with simulated time; empty bowls still hurt via affect and energy penalties — scarcity without invisible evaporation.
+### 2.3 Travel hold (issue #56, phase 1)
 
-### 2.4 Unchanged colony semantics
+State (runtime only, **not** saved): `_travel_action`, `_travel_target`, `_travel_started_at`.
 
-`_bowl_crowd_conflict`, `current_action == "eat"` for crowding, and `sim_step` ordering (conflict before `_interpret_action`) are **not** modified in this PR; issue #79 crowding tests remain valid.
+| Constant | Value |
+| --- | ---: |
+| `TRAVEL_GOAL_TIMEOUT_S` | 15.0 |
 
----
+**Start:** In `_resolve_executed_action`, if the core chose `eat` or `drink` but `_at_consumption_goal` is false, `_begin_travel(action)` sets the three fields. Executed action is forced to `eat` or `drink` with override source `homeostatic:travel_eat` or `homeostatic:travel_drink` until the walk ends.
 
-## 3. Tests
+**During hold:** `_refresh_travel_target()` retargets eat walks when a favorite bowl dries; drink target stays `waterer`. `_interpret_action` still moves one graph step per tick toward the target, then tries acquire.
 
-### 3.1 `test_issue_80_food_economy.py`
+**End travel (`_clear_travel_goal` or `_finish_travel_goal`):**
 
-| Test | Covers |
+| Event | Effect |
 | --- | --- |
-| `test_awake_animals_below_the_need_do_not_drain_the_bowls` | 24 s, three awake agents under eat/drink thresholds; bowls unchanged; hunger/thirst grow |
-| `test_empty_colony_does_not_drain_the_bowls` | 30 s, zero agents; bowls unchanged |
-| `test_eat_and_drink_events_match_the_bowl_on_a_metabolism_tick` | One bite (`BITE = 0.003 * RESOURCE_CONSUMPTION_MULTIPLIER`) per eat/drink tick; nine fed ticks + idle explore tick; bowl drop equals summed intake |
-| `test_hunger_and_thirst_still_accumulate_while_awake` | 20 s awake, full bowls, needs rise, no consumption |
-| `test_empty_bowls_still_cost_energy_and_are_not_sipped` | Empty bowls: energy penalties, bowls stay at 0, no passive drain |
-| `test_sleep_still_skips_the_empty_bowl_penalty_and_the_bowls` | Sleep: no bowl change, no empty-bowl energy penalty, hunger/thirst still grow |
+| Arrival + **one portion** taken (stock dropped vs pre-tick snapshot) | Clear after successful bite |
+| `_travel_bite_impossible` on the arrival tick | Clear same tick (no 15 s wait) |
+| `TRAVEL_GOAL_TIMEOUT_S` elapsed | Clear, core choice applies again |
+| `alarm_call` in context, or `sleep` chosen, or reflex **other than** eat/drink (`hide`, `flee`, …) | Clear before return |
+| Death (`_apply_mortality`) | Clear |
+| Critical **thirst** during food walk | `_begin_travel("drink")` (timer reset) |
+| Critical **hunger** during drink walk (thirst not critical) | `_begin_travel("eat")` or clear if no bowl to walk to |
 
-### 3.2 `test_resources.py`
+**`panic_hide` exception:** If the only matched reflex trigger is `high_stress` (no `alarm_call`), `_reflex_is_only_need_stress` suppresses that reflex for this tick so need-driven walks are not cancelled by thirst/hunger stress alone. Real `alarm_call` still wins.
 
-| Test | Covers |
+**Persistence:** `ColonyStorage` does not serialize `_travel_*`; loaded agents start with no active walk (`test_travel_is_not_saved_and_a_newborn_starts_without_one`).
+
+**Not in this PR:** multi-tick action duration for eating/drinking (#56 remainder).
+
+### 2.4 Bite gates (`physiology_as_policy`)
+
+Module thresholds (unchanged in PR):
+
+| Constant | Value |
+| --- | ---: |
+| `HUNGER_AVAILABILITY_THRESHOLD` | 0.50 |
+| `THIRST_AVAILABILITY_THRESHOLD` | 0.48 |
+
+`_needs_eat_action` / `_needs_drink_action`: need ≥ threshold; **pregnant** agents use threshold − 0.08 (same gates in `_try_acquire_resource` and `_travel_bite_impossible`).
+
+At the bowl but below gate: no portion, no hunger/thirst relief. With an active travel goal, `_finish_travel_goal` calls `_travel_bite_impossible` first — empty bowls, dry waterer (`water <= 0.02`), or sub-threshold need in policy mode **ends the walk on that tick** instead of waiting 15 s.
+
+Portion size remains `0.003 * RESOURCE_CONSUMPTION_MULTIPLIER` once per successful acquire per tick.
+
+### 2.5 Unchanged neighbours
+
+`_bowl_crowd_conflict` counts eaters **in the bowl zone**, not travelers elsewhere with `current_action == "eat"`. Issue #79 crowding semantics preserved.
+
+---
+
+## 3. Rejected variants
+
+| Variant | Outcome |
 | --- | --- |
-| `test_tc01_two_agents_basic_survival_loop` | **Updated:** 300 s, two agents; `abs(food_drop - sum(eaten)) <= 1e-9` and same for water; drop > 0 iff intake list non-empty |
-| `test_tc01_two_agents_survive_300s` | Survival regression |
-| `test_tc04_wheel_is_exclusive_resource` | Unrelated resource exclusivity regression |
-
-### 3.3 Regression neighbours (QA)
-
-`Demo/Colony chinchillas/tests/test_issue_79_contagion.py` (including `test_bowl_crowding_counts_extra_eaters_in_that_zone`). QA did not re-run `test_tc26d_sleeping_agent_does_not_consume_shared_food_or_water` or `test_tc26e_sleeping_agent_cannot_directly_eat_or_drink` in the fixed pytest set; they remain logically aligned with sleep early-return and acquire guards.
+| Passive metabolism sip (pre-PR) | Removed; see §1 |
+| **Threshold removal** (commit `c75fbd1`, reverted) | Without 0.50 / 0.48 gates the colony consumed all food and water by ~300 s; by ~600 s mean hunger and thirst pinned at 1.0. Reverted — gates stay |
+| Shared-pool bite away from bowls (non-strict top-up) | Superseded by variant B + walk |
 
 ---
 
-## 4. QA
+## 4. Tests
 
-Report: [issue-80-colony-food-economy.ru.md](../qa/issue-80-colony-food-economy.ru.md) — **PASS** at `83e1741`. `git diff origin/main -- src/` empty.
+| File | Role |
+| --- | --- |
+| `test_issue_80_food_economy.py` | Passive drain, strict bowl/waterer, policy gates, walk-without-spend |
+| `test_issue_80_travel_goal.py` | Hold, timeout, alarm/reflex/sleep/death, redirect, panic_hide, save omission, `_travel_bite_impossible` |
+| `test_resources.py` | `tc01` bowl drop equals summed eat/drink intake |
+| `test_issue_79_contagion.py` | Crowding regression |
 
----
-
-## 5. Observable effect (headless run, tech lead)
-
-Colony run **1500 s simulated**, **16 agents**, seeds **1** and **2**. Compare **`origin/main`** `89c10a0` vs **PR** `83e1741`:
-
-| Metric | main `89c10a0` | PR `83e1741` |
-| --- | ---: | ---: |
-| Time with empty food bowl | 54% | 0% |
-| Time with empty water bowl | 50% | 0% |
-| Mean hunger | 0.60 | 0.28 |
-| Fraction hungry (H > 0.4) | 0.64 | 0.25 |
-| Mean cortisol | 0.47 | 0.26 |
-| Mean energy | 0.71 | 0.97 |
-| Mean stress (seed 1 / seed 2) | 0.68 / 0.66 | 0.63 / 0.58 |
-| Fraction fearful (seed 1 / seed 2) | 0.74 / 0.72 | 0.65 / 0.64 |
+QA fixed run at `3479434` / `b955c38`: see [issue-80-colony-food-economy.en.md](../qa/issue-80-colony-food-economy.en.md) — **103 passed** on the issue #80 pytest set.
 
 ---
 
-## 6. Conclusion and limits
+## 5. Observable effect (16 agents, 1500 s, seeds 1 and 2, means)
 
-**Hunger is no longer the main stress driver** in the 16-agent scenario after fixing passive drain: bowl-empty time and mean hunger drop sharply; energy and cortisol improve. **Remaining stress and fearful fractions** (~0.58–0.65 stress, ~64–65% fearful on PR) come from other host and core sources (alarm, contagion, social conflict, policy frustration, etc.) and are **out of scope for #80**.
+Deaths: **0** on all rows. Metrics are population means from tech-lead runs (not re-run for this doc).
 
-Tuning population vs `REFILL_DAY_S`, adding explicit spoilage, or binding consumption to action duration (#56) are separate demo-environment or follow-up issues — not part of this fix.
+| Stage | Mean hunger | Mean thirst | Mean cortisol | Mean sleepers | `eat+drink` share |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| After passive drain removed | 0.28 | 0.26 | 0.26 | 2.2 | 11% |
+| Variant A (pre–variant B / pre-strict station) | 0.30 | 0.28 | 0.24 | 1.2 | 50% |
+| **Final (`3479434`)** | 0.31 | 0.31 | 0.30 | 1.2 | 16% |
+
+Earlier vs `main` baseline (`89c10a0`): empty-bowl time and hunger-dominated stress dropped sharply once passive sip was removed; variant B and travel further reshaped sleep and action-mix without deaths.
+
+---
+
+## 6. Known limits and follow-ups
+
+- **Mean sleepers ~1.2 vs ~2.2** before “eat only at the bowl” — not explained by stuck travel goals (timeouts and same-tick `_travel_bite_impossible` clear walks). QA analysis: travel hold keeps `eat`/`drink` executed longer; walks that start below the bite gate can sit at a full bowl until timeout. Tracked as a **separate task**, not a blocker for #80 behavior.
+- **Action duration** while eating/drinking (#56, beyond travel hold) — out of this PR.
+- Branch may lag `main` on unrelated `src/storage.py` (issue #87); PR diff `origin/main...HEAD -- src/` for #80 commits remains empty.
 
 ---
 
 ## 7. Design principle
 
-Strict biological fidelity in `src/`: only the Colony **host** (`colony_agent.py`) changed. Metabolism still integrates per simulated second per agent; only the **accounting** of shared bowls moved to real eat/drink acquisition.
+Core `src/` stays biofidel. Colony host fixes **accounting** (no passive sip), **geometry** (strict bowl + waterer), and **execution** (travel hold until one portion or cancel). Hunger and thirst still integrate per simulated second; stress from empty bowls when awake is unchanged in kind, only the phantom drain is gone.

@@ -1,129 +1,148 @@
-# Issue #80 — экономика корма в колонии (списание только при eat/drink)
+# Issue #80 — экономика корма в колонии (укус у миски, поход до неё)
 
 English: [issue-80-colony-food-economy.en.md](issue-80-colony-food-economy.en.md)
 
-PR #88, ветка `team/issue-80-colony-food-economy`. Колонийная часть [issue #80](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/80). Связано: [issue #74](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/74), [issue #56](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/56) (длительность действий — **вне scope**). Опирается на лай, аффект и заражение ([issue-54-affect-simulated-time.ru.md](issue-54-affect-simulated-time.ru.md), [issue-78-affect-time.ru.md](issue-78-affect-time.ru.md), [issue-79-colony-contagion.ru.md](issue-79-colony-contagion.ru.md)).
+PR #88, ветка `team/issue-80-colony-food-economy`. HEAD продукта для этой спеки: `3479434`. Колонийная часть [issue #80](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/80). Связано: [issue #74](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/74), [issue #56](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/56) (**длительность** действия — вне scope; **удержание похода** здесь — только фаза 1). Опирается на аффект и заражение ([issue-54-affect-simulated-time.ru.md](issue-54-affect-simulated-time.ru.md), [issue-78-affect-time.ru.md](issue-78-affect-time.ru.md), [issue-79-colony-contagion.ru.md](issue-79-colony-contagion.ru.md)).
 
-Код (только демо): `Demo/Colony chinchillas/src/colony_agent.py`. Тесты: `Demo/Colony chinchillas/tests/test_issue_80_food_economy.py`, `Demo/Colony chinchillas/tests/test_resources.py`. **`src/` не менялся** — ядро под демо не подгонялось.
+Код (демо): `Demo/Colony chinchillas/src/colony_agent.py`, `Demo/Colony chinchillas/src/shared_resources.py`. Тесты: `test_issue_80_food_economy.py`, `test_issue_80_travel_goal.py`, `test_resources.py`. **Коммиты PR не правят `src/`** (строгое биоподобие ядра).
 
 ---
 
 ## 1. Проблема
 
-Каждую симулированную секунду `_apply_metabolism_second` (из `_resource_metabolism_step`, когда у агента накопилась 1 с метаболизма) для **каждого бодрствующего** агента **безусловно** уменьшала общие миски:
+Каждую симулированную секунду `_apply_metabolism_second` списывала общие миски у **каждого бодрствующего** агента независимо от `eat` / `drink`:
 
-- **Корм:** `consume_food(0.0003 * RESOURCE_CONSUMPTION_MULTIPLIER, …)` раз в секунду на бодрствующего.
-- **Вода:** `water -= 0.0001 * RESOURCE_CONSUMPTION_MULTIPLIER` раз в секунду на бодрствующего.
+- **Корм:** `consume_food(0.0003 * RESOURCE_CONSUMPTION_MULTIPLIER, …)` в секунду.
+- **Вода:** `water -= 0.0001 * RESOURCE_CONSUMPTION_MULTIPLIER` в секунду.
 
-Списание **не** зависело от действий `eat` / `drink`, успешного acquire и порогов голода/жажды. Реальные укусы по-прежнему в `_try_acquire_resource`: `0.003 * RESOURCE_CONSUMPTION_MULTIPLIER` за вызов.
-
-**Наблюдаемый сбой (issue #80, stress repro):** ~93% расхода корма — пассивный сток без поедания; при **16 агентах** общая миска пуста ~54–65% времени, а пополнение (`REFILL_DAY_S = 600` с в `config_colony.py` / `simulation_runner.py`) не успевает. Голодный стресс накапливается, даже если животное не ест у миски. Это маскирует поведенческую динамику (скученность, политика, заражение) и делает хронический голод главным драйвером стресса (см. плато в [issue-79-colony-contagion.ru.md](issue-79-colony-contagion.ru.md) §5).
+При **16 агентах** миски пустели задолго до `REFILL_DAY_S = 600` с; ~93% расхода — пассивный сток без поедания (stress repro issue #80). Хронический голод маскировал остальную динамику колонии.
 
 ---
 
-## 2. Решение (только хост)
+## 2. Решение (хост + API consume)
 
-Вся логика в `colony_agent.py`. Типы ресурсов и пополнение (`shared_resources.py`, `simulation_runner.py`, `config_colony.py`) в PR **не** менялись.
-
-### 2.1 Убрать пассивное списание из метаболизма
+### 2.1 Без пассивного списания (метаболизм)
 
 В `_apply_metabolism_second` после роста голода/жажды, критических импульсов и раннего выхода при сне:
 
 | Убрано | Сохранено |
 | --- | --- |
-| Секундный `consume_food(0.0003 * …)` | Рост hunger/thirst (`HUNGER_ACCUMULATION_PER_S`, `THIRST_ACCUMULATION_PER_S`) |
-| Секундный `water -= 0.0001 * …` | Критические импульсы при сильном голоде/жажде |
-| — | Ранний выход при `is_sleeping` или `current_action == "sleep"` |
-| — | **Штрафы пустой миски:** при `pellets + hay <= 0` — аффект + `RESOURCE_MISSING_ENERGY_PENALTY_PER_S`; при `water <= 0` — аффект + `WATER_MISSING_ENERGY_PENALTY_PER_S` (с `RESOURCE_CONSUMPTION_MULTIPLIER`) |
+| Секундный `consume_food(0.0003 * …)` и `water -= 0.0001 * …` | Накопление потребностей, критические импульсы, штрафы пустой миски по аффекту и энергии (`RESOURCE_MISSING_ENERGY_PENALTY_PER_S`, `WATER_MISSING_ENERGY_PENALTY_PER_S`) |
 
-Бодрствующие агенты больше не «пьют» общий запас просто от метаболизма.
+Уровни мисок меняются только при успешном acquire (ниже). Порчи нет; `REFILL_DAY_S` не менялся.
 
-### 2.2 Списание только при успешном eat/drink
+### 2.2 Вариант Б — есть и пить только у станции (strict у миски)
 
-Миски падают **только** в `_try_acquire_resource`, размер порции и «раз за вызов» без изменений:
+**Еда:** `_try_acquire_resource("food_pellets")` только в `bowl_pellets` или `bowl_hay`. Берётся запас **этой** миски (`_food_stock(here) > 0.05`), затем:
 
-| Ресурс | Условие (кратко) | Списание |
-| --- | --- | --- |
-| `food_pellets` | Не сон; опциональный physiology gate; availability > 0.05 | `consume_food(0.003 * RESOURCE_CONSUMPTION_MULTIPLIER, …)` + `EAT_RELIEF` |
-| `water` | Не сон; опциональный physiology gate; water > 0.02 | `water -= 0.003 * RESOURCE_CONSUMPTION_MULTIPLIER` + `DRINK_RELIEF` |
+```text
+consume_food(0.003 * RESOURCE_CONSUMPTION_MULTIPLIER, primary=here, strict=True)
+```
 
-`sim_step` по-прежнему один раз вызывает `_interpret_action`; ветки `eat` и `drink` взаимоисключающие — не больше **одного** acquire за тик на агента.
+`strict=True` в `shared_resources.consume_food` списывает **только** из `primary` (`food_pellets` или `hay`). Другая миска **не** подстраховывает. Вне зоны миски голод не падает, пока шаг к миске не даст укус.
 
-**Явно вне scope этого issue:**
+**Питьё:** только в зоне `waterer` (`position == "waterer"`); иначе acquire возвращает `False` без движения воды. Один дебет `0.003 * RESOURCE_CONSUMPTION_MULTIPLIER` за успешный тик.
 
-- Порча / пассивный распад не добавлялись.
-- `REFILL_DAY_S` не менялся (`600.0`).
-- Длительность действий (#56) не трогали.
-- **`src/`** (геном, оценка, гиппокамп) без изменений — строгое биоподобие.
+**Цель похода за едой:** `_eat_travel_zone()` выбирает зону миски через `_food_primary_source()` (предпочтение `_food_source_preference`, иначе непустой пул). Пустая любимая миска ведёт к другой, если там запас > 0.05; обе пусты — нет цели, путь «нет еды».
 
-### 2.3 Биологический смысл
+**Биологический смысл:** животное ест из миски под ногами и пьёт у поилки; общий запас колонии не «испаряется» без действия.
 
-Общий корм и вода — **физическая миска**. Шиншилла уменьшает запас только когда **ест** или **пьёт** у миски (действие хоста + acquire), а не от того, что просто бодрствует в другой зоне. Голод и жажда по-прежнему растут со временем; пустые миски по-прежнему бьют по аффекту и энергии — дефицит без невидимого испарения.
+### 2.3 Удержание похода (issue #56, фаза 1)
 
-### 2.4 Неизменённая семантика колонии
+Состояние (только runtime, **не** в сейве): `_travel_action`, `_travel_target`, `_travel_started_at`.
 
-`_bowl_crowd_conflict`, `current_action == "eat"` для скученности и порядок `sim_step` (конфликт до `_interpret_action`) в PR **не** менялись; тесты скученности issue #79 остаются валидными.
+| Константа | Значение |
+| --- | ---: |
+| `TRAVEL_GOAL_TIMEOUT_S` | 15.0 |
 
----
+**Старт:** в `_resolve_executed_action`, если ядро выбрало `eat` или `drink`, а `_at_consumption_goal` ложен, `_begin_travel(action)` заполняет три поля. Исполняемое действие принудительно `eat` / `drink` с источником `homeostatic:travel_eat` или `homeostatic:travel_drink`, пока поход не завершён.
 
-## 3. Тесты
+**Пока держится:** `_refresh_travel_target()` перенацеливает еду при высыхании любимой миски; питьё — всегда `waterer`. `_interpret_action` делает один шаг по графу к цели и вызывает acquire.
 
-### 3.1 `test_issue_80_food_economy.py`
+**Завершение (`_clear_travel_goal` / `_finish_travel_goal`):**
 
-| Тест | Что проверяет |
+| Событие | Эффект |
 | --- | --- |
-| `test_awake_animals_below_the_need_do_not_drain_the_bowls` | 24 с, три агента ниже порогов eat/drink; миски неизменны; голод/жажда растут |
-| `test_empty_colony_does_not_drain_the_bowls` | 30 с, 0 агентов; миски неизменны |
-| `test_eat_and_drink_events_match_the_bowl_on_a_metabolism_tick` | Один укус (`BITE = 0.003 * RESOURCE_CONSUMPTION_MULTIPLIER`) за тик eat/drink; 9 кормящих тиков + idle explore; падение миски = сумма приёма |
-| `test_hunger_and_thirst_still_accumulate_while_awake` | 20 с бодрствования, полные миски, рост потребностей без списания |
-| `test_empty_bowls_still_cost_energy_and_are_not_sipped` | Пустые миски: штрафы энергии, уровни 0, без пассивного стока |
-| `test_sleep_still_skips_the_empty_bowl_penalty_and_the_bowls` | Сон: миски и энергия без штрафа пустой миски, голод/жажда растут |
+| Прибытие + **одна порция** (запас упал относительно снимка до тика) | Сброс после укуса |
+| `_travel_bite_impossible` в тик прибытия | Сброс в **этот же** тик (без ожидания 15 с) |
+| Истёк `TRAVEL_GOAL_TIMEOUT_S` | Сброс, снова выбор ядра |
+| `alarm_call`, выбран `sleep`, рефлекс **не** eat/drink (`hide`, `flee`, …) | Сброс до return |
+| Смерть (`_apply_mortality`) | Сброс |
+| Критическая **жажда** во время похода за едой | `_begin_travel("drink")` (таймер сброшен) |
+| Критический **голод** во время похода за водой (жажда не критична) | `_begin_travel("eat")` или сброс, если идти некуда |
 
-### 3.2 `test_resources.py`
+**Исключение `panic_hide`:** если единственный триггер рефлекса — `high_stress` (без `alarm_call`), `_reflex_is_only_need_stress` глушит рефлекс на этот тик, чтобы поход от нужды не срывался стрессом жажды/голода. Настоящий `alarm_call` по-прежнему побеждает.
 
-| Тест | Что проверяет |
+**Сохранение:** `ColonyStorage` не сериализует `_travel_*`; после загрузки похода нет (`test_travel_is_not_saved_and_a_newborn_starts_without_one`).
+
+**Вне этого PR:** длительность eat/drink на несколько тиков (#56, остаток).
+
+### 2.4 Пороги укуса (`physiology_as_policy`)
+
+Константы модуля (в PR без изменений):
+
+| Константа | Значение |
+| --- | ---: |
+| `HUNGER_AVAILABILITY_THRESHOLD` | 0.50 |
+| `THIRST_AVAILABILITY_THRESHOLD` | 0.48 |
+
+`_needs_eat_action` / `_needs_drink_action`: потребность ≥ порога; у **беременных** порог − 0.08 (те же проверки в `_try_acquire_resource` и `_travel_bite_impossible`).
+
+У миски, но ниже порога: нет порции и облегчения. При активном походе `_finish_travel_goal` сначала вызывает `_travel_bite_impossible` — пустые миски, сухая поилка (`water <= 0.02`) или нужда ниже порога в policy-режиме **закрывают поход в этот тик**, а не на 15 с.
+
+Размер порции: `0.003 * RESOURCE_CONSUMPTION_MULTIPLIER`, не больше одного успешного acquire за тик.
+
+### 2.5 Соседняя семантика без изменений
+
+`_bowl_crowd_conflict` считает едоков **в зоне миски**, не путников с `current_action == "eat"` вне зоны. Скученность issue #79 сохранена.
+
+---
+
+## 3. Отвергнутые варианты
+
+| Вариант | Итог |
 | --- | --- |
-| `test_tc01_two_agents_basic_survival_loop` | **Обновлён:** 300 с, два агента; `abs(food_drop - sum(eaten)) <= 1e-9` и то же для воды; drop > 0 тогда и только тогда, когда список приёма непуст |
-| `test_tc01_two_agents_survive_300s` | Регрессия выживания |
-| `test_tc04_wheel_is_exclusive_resource` | Эксклюзивность колеса (регрессия) |
-
-### 3.3 Соседние регрессии (QA)
-
-`Demo/Colony chinchillas/tests/test_issue_79_contagion.py` (включая `test_bowl_crowding_counts_extra_eaters_in_that_zone`). В фиксированном прогоне QA не запускались `test_tc26d_sleeping_agent_does_not_consume_shared_food_or_water` и `test_tc26e_sleeping_agent_cannot_directly_eat_or_drink`; логически они согласованы с ранним выходом при сне и guard в acquire.
+| Пассивный глоток в метаболизме (до PR) | Снят; см. §1 |
+| **Снятие порогов** (коммит `c75fbd1`, откачено) | Без 0.50 / 0.48 колония съедала и выпивала всё к ~300 с; к ~600 с средние голод и жажда = 1.0. Откат — пороги остаются |
+| Укус из общего пула вне миски (non-strict, подпитка из другой миски) | Заменён вариантом Б + поход |
 
 ---
 
-## 4. QA
+## 4. Тесты
 
-Отчёт: [issue-80-colony-food-economy.ru.md](../qa/issue-80-colony-food-economy.ru.md) — **PASS** на `83e1741`. `git diff origin/main -- src/` пуст.
+| Файл | Роль |
+| --- | --- |
+| `test_issue_80_food_economy.py` | Пассивный сток, strict миска/поилка, policy-пороги, поход без списания |
+| `test_issue_80_travel_goal.py` | Удержание, таймаут, alarm/рефлекс/сон/смерть, перенацеливание, panic_hide, отсутствие в сейве, `_travel_bite_impossible` |
+| `test_resources.py` | `tc01`: падение миски = сумма eat/drink |
+| `test_issue_79_contagion.py` | Регрессия скученности |
 
----
-
-## 5. Наблюдаемый эффект (headless, tech lead)
-
-Прогон колонии **1500 с**, **16 агентов**, сиды **1** и **2**. Сравнение **`origin/main`** `89c10a0` и **PR** `83e1741`:
-
-| Метрика | main `89c10a0` | PR `83e1741` |
-| --- | ---: | ---: |
-| Доля времени с пустой миской корма | 54% | 0% |
-| Доля времени с пустой миской воды | 50% | 0% |
-| Средний голод | 0.60 | 0.28 |
-| Доля голодных (H > 0.4) | 0.64 | 0.25 |
-| Средний кортизол | 0.47 | 0.26 |
-| Средняя энергия | 0.71 | 0.97 |
-| Средний стресс (seed 1 / seed 2) | 0.68 / 0.66 | 0.63 / 0.58 |
-| Доля fearful (seed 1 / seed 2) | 0.74 / 0.72 | 0.65 / 0.64 |
+QA на `3479434` / `b955c38`: [issue-80-colony-food-economy.en.md](../qa/issue-80-colony-food-economy.en.md) — **103 passed** в фиксированном наборе #80.
 
 ---
 
-## 6. Вывод и ограничения
+## 5. Наблюдаемый эффект (16 агентов, 1500 с, сиды 1 и 2, средние)
 
-После снятия пассивного стока **голод больше не главный источник стресса** в сценарии на 16 агентов: время пустых мисок и средний голод резко падают; энергия и кортизол улучшаются. **Остаточный стресс и доля fearful** (~0.58–0.63 стресс, ~64–65% fearful на PR) идут из других источников хоста и ядра (лай, заражение, социальный конфликт, фрустрация политики и т.д.) и **вне scope #80**.
+Смертей: **0** во всех строках. Метрики — средние по прогонам тимлида (в этом документе не пересчитывались).
 
-Подгонка численности под `REFILL_DAY_S`, явная порча или привязка списания к длительности действий (#56) — отдельные задачи по среде демо или follow-up, не часть этого фикса.
+| Этап | Средний голод | Средняя жажда | Средний кортизол | Среднее число спящих | Доля `eat+drink` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| После снятия пассивного стока | 0.28 | 0.26 | 0.26 | 2.2 | 11% |
+| Вариант А (до варианта Б / до «только у миски») | 0.30 | 0.28 | 0.24 | 1.2 | 50% |
+| **Итог (`3479434`)** | 0.31 | 0.31 | 0.30 | 1.2 | 16% |
+
+Относительно `main` `89c10a0`: после снятия пассивного сипа резко упали пустые миски и голодный стресс; вариант Б и поход изменили сон и смесь действий без смертей.
+
+---
+
+## 6. Известные ограничения и follow-up
+
+- **Спящих в среднем ~1.2 против ~2.2** до правила «есть только у миски» — висящие походы это **не** объясняют (таймаут и `_travel_bite_impossible` в тот же тик). Разбор QA: удержание `eat`/`drink` удлиняет исполнение; походы ниже порога укуса могут стоять у полной миски до таймаута. Вынесено в **отдельную задачу**, не блокер поведения #80.
+- **Длительность** еды/питья (#56, после удержания похода) — вне этого PR.
+- Ветка может отставать от `main` по постороннему `src/storage.py` (issue #87); diff коммитов #80 `origin/main...HEAD -- src/` пуст.
 
 ---
 
 ## 7. Принцип проектирования
 
-Строгое биоподобие в `src/`: менялся только **хост** колонии (`colony_agent.py`). Метаболизм по-прежнему интегрируется по симулированным секундам на агента; изменён только **учёт** общих мисок — списание перенесено на реальный eat/drink в acquire.
+Ядро `src/` биоподобно. Хост колонии правит **учёт** (нет пассивного сипа), **геометрию** (strict миска + поилка) и **исполнение** (поход до одной порции или отмены). Голод и жажда по-прежнему интегрируются по симулированным секундам; стресс от пустых мисок при бодрствовании того же типа — исчез только «фантомный» сток.
