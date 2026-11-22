@@ -427,28 +427,27 @@ def test_drink_at_the_waterer_takes_one_portion() -> None:
     assert agent.thirst == pytest.approx(0.9 - DRINK_RELIEF)
 
 
-def test_policy_mode_bites_at_moderate_hunger() -> None:
-    """The 0.50 availability line no longer refuses a bite the core already chose."""
-    agent = _hungry(position="bowl_pellets", hunger=0.3, thirst=0.3, seed=103)
-    agent._interpret_action("eat")
-    assert agent.resources.food_pellets == pytest.approx(1.0 - BITE)
-    assert agent.hunger == 0.0
-    agent.position = "waterer"
-    agent._interpret_action("drink")
-    assert agent.resources.water == pytest.approx(1.0 - BITE)
-    assert agent.thirst == 0.0
+def test_policy_mode_refuses_a_bite_below_availability() -> None:
+    """0.50 / 0.48 still gate a bite. 0.6 is above both lines and takes a portion."""
+    mild = _hungry(position="bowl_pellets", hunger=0.3, thirst=0.3, seed=103)
+    mild._interpret_action("eat")
+    assert mild.resources.food_pellets == 1.0
+    assert mild.resources.hay == 1.0
+    assert mild.hunger == 0.3
+    mild.position = "waterer"
+    mild._interpret_action("drink")
+    assert mild.resources.water == 1.0
+    assert mild.thirst == 0.3
 
-
-def test_policy_satiety_does_not_bite() -> None:
-    agent = _hungry(position="bowl_pellets", hunger=0.02, thirst=0.02, seed=104)
-    agent._interpret_action("eat")
-    assert agent.resources.food_pellets == 1.0
-    assert agent.resources.hay == 1.0
-    assert agent.hunger == 0.02
-    agent.position = "waterer"
-    agent._interpret_action("drink")
-    assert agent.resources.water == 1.0
-    assert agent.thirst == 0.02
+    fed = _hungry(position="bowl_pellets", hunger=0.6, thirst=0.1, seed=104)
+    fed._interpret_action("eat")
+    assert fed.resources.food_pellets == pytest.approx(1.0 - BITE)
+    assert fed.hunger == pytest.approx(0.6 - EAT_RELIEF)
+    fed.position = "waterer"
+    fed.thirst = 0.6
+    fed._interpret_action("drink")
+    assert fed.resources.water == pytest.approx(1.0 - BITE)
+    assert fed.thirst == pytest.approx(0.0)
 
 
 def test_non_policy_homeostatic_swap_still_uses_the_availability_line() -> None:
@@ -461,8 +460,8 @@ def test_non_policy_homeostatic_swap_still_uses_the_availability_line() -> None:
     assert mild._apply_homeostatic_action_policy("eat") == "explore"
     assert mild._apply_homeostatic_action_policy("drink") == "explore"
 
-    # Acquire itself never had this gate when the policy is off, including
-    # below the satiety floor. The swap above is what keeps a mild animal away.
+    # Acquire itself never had this gate when the policy is off. The swap
+    # above is what keeps a mild animal away from the bowl.
     mild.resources = SharedResources()
     mild.colony = [mild]
     mild.position = "bowl_pellets"

@@ -201,6 +201,9 @@ def test_reward_ignores_valence_and_is_scored_after_the_action():
     fed.replaced_policy_action = "rest"
     fed.colony = [fed]
     fed.resources = SharedResources()
+    assert fed.resources.food_pellets > 0.05
+    assert fed.resources.hay > 0.05
+    fed.position = "bowl_pellets"
     fed.hunger = 0.9
     fed.thirst = 0.1
     fed.wakefulness.wakefulness = 0.1

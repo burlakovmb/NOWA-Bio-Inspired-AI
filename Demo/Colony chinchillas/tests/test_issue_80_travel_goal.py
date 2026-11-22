@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from colony_agent import TRAVEL_GOAL_TIMEOUT_S, ChinchillaAgent
+from colony_agent import (
+    HUNGER_ACCUMULATION_PER_S,
+    THIRST_ACCUMULATION_PER_S,
+    TRAVEL_GOAL_TIMEOUT_S,
+    ChinchillaAgent,
+)
 from agent import Agent
 from colony_behavior_profile import UnconditionedReflex
 from colony_storage import ColonyStorage
@@ -357,8 +362,8 @@ def test_travel_is_not_saved_and_a_newborn_starts_without_one(tmp_path) -> None:
     assert agent._travel_started_at is None
 
 
-def test_satiety_closes_the_walk_on_the_same_tick() -> None:
-    eater = _walker(position="bowl_pellets", hunger=0.0, thirst=0.2)
+def test_below_availability_closes_the_walk_on_the_same_tick() -> None:
+    eater = _walker(position="bowl_pellets", hunger=0.3, thirst=0.2)
     eater._travel_action = "eat"
     eater._travel_target = "bowl_pellets"
     eater._travel_started_at = 0.0
@@ -367,9 +372,9 @@ def test_satiety_closes_the_walk_on_the_same_tick() -> None:
     assert eater._travel_action is None
     assert eater.resources is not None
     assert eater.resources.food_pellets == pytest.approx(1.0)
-    assert eater.resources.hay == pytest.approx(1.0)
+    assert eater.hunger == pytest.approx(0.3 + HUNGER_ACCUMULATION_PER_S)
 
-    drinker = _walker(position="waterer", hunger=0.2, thirst=0.0)
+    drinker = _walker(position="waterer", hunger=0.2, thirst=0.3)
     drinker._travel_action = "drink"
     drinker._travel_target = "waterer"
     drinker._travel_started_at = 0.0
@@ -378,6 +383,27 @@ def test_satiety_closes_the_walk_on_the_same_tick() -> None:
     assert drinker._travel_action is None
     assert drinker.resources is not None
     assert drinker.resources.water == pytest.approx(1.0)
+    assert drinker.thirst == pytest.approx(0.3 + THIRST_ACCUMULATION_PER_S)
+
+    fed = _walker(position="bowl_pellets", hunger=0.6, thirst=0.1)
+    fed._travel_action = "eat"
+    fed._travel_target = "bowl_pellets"
+    fed._travel_started_at = 0.0
+    fed.replaced_policy_action = "socialize"
+    fed.sim_step(1.25)
+    assert fed._travel_action is None
+    assert fed.resources is not None
+    assert fed.resources.food_pellets == pytest.approx(1.0 - BITE)
+
+    watered = _walker(position="waterer", hunger=0.1, thirst=0.6)
+    watered._travel_action = "drink"
+    watered._travel_target = "waterer"
+    watered._travel_started_at = 0.0
+    watered.replaced_policy_action = "play"
+    watered.sim_step(1.25)
+    assert watered._travel_action is None
+    assert watered.resources is not None
+    assert watered.resources.water == pytest.approx(1.0 - BITE)
 
 
 def test_empty_bowls_close_the_walk_on_the_same_tick() -> None:

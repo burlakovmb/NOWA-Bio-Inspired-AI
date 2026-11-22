@@ -105,6 +105,7 @@ def test_colony_episode_follows_executed_outcome_not_pre_action_choice():
     agent = ChinchillaAgent(sex="F", physiology_as_policy=False)
     agent.colony = []
     agent.resources = SharedResources(food_pellets=1.0, hay=1.0, water=1.0)
+    agent.position = "bowl_pellets"
     agent.hunger = 0.9
     agent.thirst = 0.1
     agent.wakefulness.wakefulness = 0.1
