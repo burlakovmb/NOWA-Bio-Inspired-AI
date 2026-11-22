@@ -1,73 +1,77 @@
-# QA issue #80 — корм и вода только на eat/drink
+# QA issue #80 — миска под ногами и поход к ней
 
-Ветка: `team/issue-80-colony-food-economy`. HEAD продукта на момент прогона: `83e1741` (`83e1741c8d30654cf930d726ea022a98e4819b7b`). PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/88. Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/80. База diff: `origin/main` (`89c10a0`, `89c10a0d680b6546f1c30522743292e1081b3f0b`).
+English: [issue-80-colony-food-economy.en.md](issue-80-colony-food-economy.en.md)
 
-Код продукта и тесты в этом проходе не менялись. Новый PR не создавался, комментариев на GitHub нет, мержа нет. CI не ждали. Длинные тесты и симуляция 16 агентов не запускались.
+Ветка: `team/issue-80-colony-food-economy`. HEAD: `b955c38` (`b955c385af8cf779896dc45192b0d2190b0a42a4`). PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/88. Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/80. База: `origin/main` `226e928` (`226e928dfe41875dd017cd815e485b256c1e7721`). Новые коммиты после прохода на `83e1741`: `53f7b17` (есть и пить только у миски/поилки, `strict`) и `b955c38` (удержание похода, первая фаза #56).
+
+Код продукта в этом проходе не менялся. Новый PR не создавался, мержа нет. CI не ждали. Замер 16 агентов не повторялся.
 
 Машина: Python 3.12.3, pytest 9.2.0.
 
+Предыдущий проход на `83e1741` был **PASS** по тогдашнему чеклисту (пассивное списание снято, `src/` относительно тогдашнего `main` `89c10a0` пуст). Этот отчёт его заменяет.
+
 ## Вердикт
 
-**PASS** (`83e1741`).
+**PASS** по пунктам 1–7, 9 и 10. Пункт 8 **FAIL**.
 
-Семь пунктов чеклиста проходят. Пассивное секундное списание из `_apply_metabolism_second` снято. Порция eat/drink остаётся `0.003 * RESOURCE_CONSUMPTION_MULTIPLIER` и списывается один раз за тик действия. Голод и жажда растут, ранний выход во сне и штрафы пустой миски на месте. `src/` не изменён. `REFILL_DAY_S` не менялся (`600.0`), порчи нет.
+Поведение миски и похода совпадает с чеклистом. Единственный дефект: ветка не содержит коммит `main` `b698959` (`src/storage.py`, issue #87), поэтому буквальный `git diff origin/main -- src/` не пуст. Коммиты этого PR `src/` не редактируют.
 
-## Покрытие (сценарии: 7 пройдено / 0 провалено / 0 не запускалось)
+## Покрытие
 
 | # | Проверка | Результат |
 | --- | --- | --- |
-| 1 | `git diff origin/main -- src/` пуст | Pass. 0 байт. В `--name-only` три файла демо: `colony_agent.py` (`+7/−9`), `tests/test_issue_80_food_economy.py` (`+238`), `tests/test_resources.py` (`+37/−2`) |
-| 2 | `_apply_metabolism_second` против `main` | Pass. Вызова `consume_food` нет, присваивания `water` нет. Убраны пассивные `consume_food(0.0003 * RESOURCE_CONSUMPTION_MULTIPLIER)` и `water - (0.0001 * RESOURCE_CONSUMPTION_MULTIPLIER)`. Рост hunger/thirst и критические импульсы стоят до раннего выхода `is_sleeping or current_action == "sleep"`. Штраф пустого корма (`pellets + hay <= 0`: stress `0.02`, valence `-0.02`, intensity `0.5`, `RESOURCE_MISSING_ENERGY_PENALTY_PER_S`) и пустой воды (`water <= 0`: stress `0.02`, intensity `0.4`, `WATER_MISSING_ENERGY_PENALTY_PER_S`) сохранены |
-| 3 | Одно списание на тике eat/drink, других путей нет | Pass. `sim_step` вызывает `_interpret_action` один раз. Ветки `eat` / `drink` взаимоисключающие: один вызов `_try_acquire_resource`. Еда: один `consume_food(0.003 * RESOURCE_CONSUMPTION_MULTIPLIER)`. Вода: одно присваивание `water - (0.003 * RESOURCE_CONSUMPTION_MULTIPLIER)`. Функция в diff не входила. `rg` по `Demo/Colony chinchillas/src`: `consume_food` только определение в `shared_resources.py` и вызов в `_try_acquire_resource`; совпадений `.water -=`, `food_pellets -=`, `hay -=` нет. `config_colony.py`, `simulation_runner.py`, `shared_resources.py` в diff против `main` не входят |
-| 4 | `tc01` не ослаблен | Pass. `test_tc01_two_agents_basic_survival_loop` сверяет падение миски с суммой съеденного и выпитого: `abs(food_drop - sum(eaten)) <= 1e-9` и то же для воды. Отдельно: падение `> 1e-12` тогда и только тогда, когда список приёма непуст. Это не проверка «миска не упала» |
-| 5 | Заданный pytest | Pass. 16 passed, 13.55 с, exit 0. Состав ниже |
-| 6 | Пустая колония и сон не трогают миски | Pass. `test_empty_colony_does_not_drain_the_bowls`: 0 агентов, `run_for(30, dt=1)`, миски равны старту. `test_sleep_still_skips_the_empty_bowl_penalty_and_the_bowls`: сон, пустые миски, одна секунда метаболизма, уровни `0`, энергия без штрафа, голод и жажда растут. Ранний выход стоит до любой записи в миски; `_try_acquire_resource` на food/water при сне возвращает False до списания |
-| 7 | `_bowl_crowd_conflict` и `current_action == "eat"` | Pass. Метод и вызов из `_compute_conflict` в diff не входят. Едок по-прежнему агент в зоне миски с `current_action == "eat"`. `_interpret_action` по-прежнему ставит `current_action = action` до единственного acquire, поэтому eat по-прежнему публикует `"eat"`. Порядок `sim_step` тот же: конфликт считается до `_interpret_action`. `test_bowl_crowding_counts_extra_eaters_in_that_zone` в неизменённом `test_issue_79_contagion.py` проходит |
+| 1 | У `bowl_pellets` только гранулы, у `bowl_hay` только сено; вдали от миски нет списания и голод не падает | Pass. Проба: у миски гранул при предпочтении сена `food_pellets` `1 → 0.994`, `hay` `1`, голод `0.9 → 0.42`. У миски сена наоборот. Из `house` один шаг в `floor`, обе миски `1`, голод `0.9`, аффект без изменений |
+| 2 | Пустая любимая миска → другая и ест; обе пустые → нет списания, есть импульс «нет еды»; на пути импульса нет | Pass. С `bowl_pellets` при `pellets=0`, `hay=1` один шаг в `bowl_hay`, сено `0.994`, голод `0.42`. Обе нулевые: уровни `0`, голод `0.9`, оси аффекта совпали с импульсом `stress=0.2`, `valence=-0.3`, `intensity=0.8`. С `house` при полных мисках шаг в `floor` без импульса и без списания |
+| 3 | `drink` только на `waterer`; с `floor` и с `house` поход доходит и берёт порцию, даже если ядро в промежутке выбирает другое | Pass. Оба `physiology_as_policy` True и False. Скрипт ядра: `drink`, затем `socialize` / `play`. `floor → bowl_hay → waterer` за `2.5` с, вода `0.994`, жажда `< 0.5`. `house → floor → bowl_hay → waterer` за `3.75` с, та же порция. До `waterer` вода остаётся `1` |
+| 4 | Сброс похода: 15 с, `alarm_call`, другой рефлекс, сон, смерть; сейв не несёт поход; critical thirst с еды переключает на воду | Pass. Тайм-аут на `sim_time` `4 → 19`: действие `play`, поход пуст. `alarm_call` → `hide`, `reflex:panic_hide`. Рефлекс `flee` по `boom` снимает поход. `sleep` снимает поход. Смерть через `_apply_mortality`: `current_action=dead`, поля похода пусты. `ColonyStorage`: в JSON нет `_travel_action`, после загрузки поля `None`. Жажда `0.82` во время похода за едой: `drink`, цель `waterer`, таймер сброшен на `3.0` |
+| 5 | `panic_hide` только от `high_stress` во время похода не срывает поход и не берёт cooldown; реальная тревога прячет; вне похода страх не заглушён | Pass. Во время похода `high_stress` + `thirst_critical`: остаётся `drink`, `panic_hide` нет в `_reflex_last_activation`. Следующий `alarm_call` в том же `sim_time` `5.0` прячет и ставит cooldown `5.0` (подавленный стресс его не занял). Вне похода `high_stress` → `hide`, cooldown `8.0`, повтор в тот же момент уже `explore`. Отдельный рефлекс `predator` → `flee` во время похода поход снимает. В профиле колонии у `panic_hide` триггеры только `alarm_call` и `high_stress`; отдельного события «угроза» нет |
+| 6 | Спящий не ест и не пьёт; оба режима `physiology_as_policy` | Pass. True и False: сон на миске и на поилке не меняет запасы и голод/жажду `0.9`. Бодрствующий ест у `bowl_pellets` (`0.994` / сено `1`) и с `wheel` только переходит на `floor`, голод остаётся `0.9` |
+| 7 | `_bowl_crowd_conflict` не считает идущего вне зоны миски | Pass. Едок в `bowl_pellets` и идущий в `floor` с `current_action=eat` и `_travel_action=eat`: конфликт наблюдателя в зоне `0.15` (один лишний, идущий не в счёт). Тот же агент в зоне: `0.30`. Идущий один в `floor`: `0` |
+| 8 | `git diff origin/main -- src/` пуст | **Fail.** 6978 байт, только `src/storage.py` (`+16/−53` в сторону HEAD). Это не правка PR: `git diff origin/main...HEAD -- src/` пуст. На `main` есть `b698959` (`fix(issue-87): save_agent and load_agent take every component from agent=`), в ветке его нет. Merge-base по-прежнему `89c10a0` |
+| 9 | Заданный pytest, включая длинные файлы один раз | Pass. `103 passed`, `278.11` с, exit 0. Предупреждение pygame `pkg_resources`, не падение |
+| 10 | Почему сна примерно вдвое меньше | Pass как объяснение, не как дефект. См. ниже |
 
-Заданный прогон, exit 0:
+Проба сценариев 1–7: 34/34, exit по хвосту сна был из-за печати реестра смертей уже после этих проверок. Повторный прогон сна ниже завершился сам.
+
+Pytest, exit 0:
 
 ```
-SDL_VIDEODRIVER=dummy pytest \
+SDL_VIDEODRIVER=dummy python3 -m pytest \
+  "Demo/Colony chinchillas/tests/test_issue_80_travel_goal.py" \
   "Demo/Colony chinchillas/tests/test_issue_80_food_economy.py" \
+  "Demo/Colony chinchillas/tests/test_nowa_agent.py" \
+  "Demo/Colony chinchillas/tests/test_issue_79_contagion.py" \
   "Demo/Colony chinchillas/tests/test_resources.py" \
-  "Demo/Colony chinchillas/tests/test_issue_79_contagion.py" -q
+  "Demo/Colony chinchillas/tests/test_fix_colony_no_rest.py" \
+  "Demo/Colony chinchillas/tests/test_colony_dt_invariance.py" -q --tb=line
 ```
 
-`16 passed in 13.55s`
+`103 passed, 1 warning in 278.11s`
 
-Шесть тестов `test_issue_80_food_economy.py`: бодрствующие ниже порога потребности не трогают миски, голод и жажда за 24 с растут на `24 * HUNGER_ACCUMULATION_PER_S` / `THIRST_ACCUMULATION_PER_S`; пустая колония; один укус eat и один глоток drink за тик `dt=1` равны `BITE`, падение миски равно сумме приёма, девять таких тиков и следующий explore миски не двигают; накопление голода и жажды 20 с при полных мисках; пустые миски дают оба штрафа энергии и сами не убывают; сон пропускает штраф и не меняет пустые миски.
+## Пункт 10 — почему сна примерно вдвое меньше
 
-Три теста `test_resources.py`: `tc01` на равенство падения и приёма (300 с, два агента), `test_tc01_two_agents_survive_300s`, `test_tc04_wheel_is_exclusive_resource`.
+Контекст тимлида, не воспроизводился (16 агентов, 1500 с, сиды 1 и 2, средние): жажда `0.28` (до варианта Б `0.26`, на `53f7b17` `0.60`), голод `0.30`, кортизол `0.24`, энергия `0.97`, смертей `0`. Спят в среднем `1.2` агента против `2.2` до варианта Б. `eat+drink` ~50% тиков из-за похода.
 
-Семь тестов `test_issue_79_contagion.py`, включая `test_bowl_crowding_counts_extra_eaters_in_that_zone`.
+Код. Поход не подменяет явное `sleep`: в `_resolve_executed_action` действие `sleep`, `alarm_call` или чужой рефлекс снимают цель и возвращаются сразу. Иначе удержание подставляет `eat`/`drink` до порции, пустой цели или 15 с. При `physiology_as_policy=True` гомеостатический форс сна не вызывается. Укус закрывает поход в `_finish_travel_goal` только если запас реально упал или есть нечего. Если агент уже у миски, но голод ниже `HUNGER_AVAILABILITY_THRESHOLD` (`0.50`) или жажда ниже `0.48`, `_try_acquire_resource` выходит без порции, и поход не заканчивается до таймаута. Сон до порога Process S `0.7` всё равно сбрасывается в `_apply_sleep_recovery`. Порог `0.7` при множителе `WAKEFULNESS_ACCUMULATION_FACTOR=30` и скорости `1/(16*3600)` — около `1344` с непрерывного бодрствования с нуля.
 
-Вне этого прогона, файл не в diff: `test_tc26d_sleeping_agent_does_not_consume_shared_food_or_water` (полные миски, метаболизм во сне) и `test_tc26e_sleeping_agent_cannot_directly_eat_or_drink` (acquire во сне возвращает False, полные миски на месте). Не запускались: команда прогона была фиксированной.
+Прогон, 4 агента, `dt=0.25`, seed 1, без правки продукта.
 
-## Контекст замера тимлида
+С нуля, 600 с: спящих `0`, `eat+drink` `0.659`, поход `0.654`, средний голод `0.290`, жажда `0.262`, энергия `0.973`. Process S за 600 с не доходит до `0.7`, поэтому сравнить `1.2` и `2.2` на этом окне нельзя. 528 вызовов `_wake_from_sleep` почти все не от голода (нужда только 6, все жажда): это отмена «сна» до onset.
 
-Не воспроизводился. 16 агентов, 1500 с, сиды 1 и 2, `main` `89c10a0` против PR `83e1741`. Где дана одна цифра, в задании она одна. Пара через слэш — сиды 1 и 2 в этом порядке.
+Отдельно: старт похода при голоде `0.2` с `floor`. Уже на первой точке агент в `bowl_pellets`, гранулы `1`, голод `0.2`, `_travel_action` остаётся `eat` на всех шести шагах по `1.25` с.
 
-| Метрика | main `89c10a0` | PR `83e1741` |
-| --- | --- | --- |
-| Доля времени с пустой миской корма | 54% | 0% |
-| Доля времени с пустой миской воды | 50% | 0% |
-| Средний голод | 0.60 | 0.28 |
-| Доля голодных (H>0.4) | 0.64 | 0.25 |
-| Кортизол | 0.47 | 0.26 |
-| Энергия | 0.71 | 0.97 |
-| Средний стресс (сиды 1 / 2) | 0.68 / 0.66 | 0.63 / 0.58 |
-| Доля fearful (сиды 1 / 2) | 0.74 / 0.72 | 0.65 / 0.64 |
+С Process S, выставленным в `0.65` (чтобы уложиться в 600 с и попасть в режим, который у тимлида начинается после ~1344 с): спят в среднем `1.026` из 4 (`0.256` тиков), `eat+drink` `0.227`, поход `0.224`, голод `0.479`, жажда `0.557`, средний Process S `0.698`, максимум `0.819`. При `wake>=0.7` ядро выбрало `sleep` 1498 раз, исполнено 1482, подменено 16. Удержание похода в этой зоне 846 тиков. Из 542 стартов похода 197 начаты ниже порога укуса.
 
-Вывод тимлида, принят как контекст: голод больше не главный источник стресса. Остаток стресса из других источников, вне scope #80.
+Вывод. Поход не глушит решение `sleep` (подмена 16 из 1498). Сна меньше, потому что дорога и особенно поход без укуса держат `eat`/`drink` до 15 с вместо одного тика, как было до привязки к миске. На сытом старте это уже 66% тиков ещё до onset. Жажда при этом остаётся около `0.26–0.28`: до поилки они доходят, просто проводят путь бодрствуя. Это сходится с ~50% `eat+drink` и со спадом `2.2 → 1.2` без роста жажды. Отдельной поломки сна нет.
 
 ## Дефекты
 
-Нет.
+`[LOW]` Ветка отстаёт от `origin/main` `226e928` на `b698959` (`src/storage.py`, issue #87). `git diff origin/main -- src/` не пуст. Коммиты PR `src/` не трогают, трёхсторонний мерж эту правку ядра не откатывает.
 
 ## Рекомендации
 
-Полный pytest и длинные тесты (`test_fix_colony_no_rest`, `test_colony_dt_invariance`) остаются на уже зелёном CI коммита `83e1741`. Повторный замер 16 агентов не нужен для этого чеклиста.
+Перед мержем влить текущий `main`, чтобы пункт 8 стал пустым. Походы, начатые ниже порога укуса, досиживают 15 с у полной миски и раздувают долю `eat+drink`; это объяснение пункта 10, не дыра чеклиста.
 
 ## Готовность
 
-Да, по этому чеклисту.
+Да по поведению #80 на `b955c38`. Пункт 8 закрывается вливанием `main`, не правкой демо.
