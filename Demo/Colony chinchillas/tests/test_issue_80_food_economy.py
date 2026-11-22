@@ -427,14 +427,47 @@ def test_drink_at_the_waterer_takes_one_portion() -> None:
     assert agent.thirst == pytest.approx(0.9 - DRINK_RELIEF)
 
 
-def test_needs_gate_still_blocks_a_bite_at_the_bowl() -> None:
-    agent = _hungry(position="bowl_pellets", hunger=0.2, thirst=0.2, seed=103)
-    agent.position = "bowl_pellets"
+def test_policy_mode_bites_at_moderate_hunger() -> None:
+    """The 0.50 availability line no longer refuses a bite the core already chose."""
+    agent = _hungry(position="bowl_pellets", hunger=0.3, thirst=0.3, seed=103)
+    agent._interpret_action("eat")
+    assert agent.resources.food_pellets == pytest.approx(1.0 - BITE)
+    assert agent.hunger == 0.0
+    agent.position = "waterer"
+    agent._interpret_action("drink")
+    assert agent.resources.water == pytest.approx(1.0 - BITE)
+    assert agent.thirst == 0.0
+
+
+def test_policy_satiety_does_not_bite() -> None:
+    agent = _hungry(position="bowl_pellets", hunger=0.02, thirst=0.02, seed=104)
     agent._interpret_action("eat")
     assert agent.resources.food_pellets == 1.0
     assert agent.resources.hay == 1.0
-    assert agent.hunger == 0.2
+    assert agent.hunger == 0.02
     agent.position = "waterer"
     agent._interpret_action("drink")
     assert agent.resources.water == 1.0
-    assert agent.thirst == 0.2
+    assert agent.thirst == 0.02
+
+
+def test_non_policy_homeostatic_swap_still_uses_the_availability_line() -> None:
+    """Without the policy, a mild eat/drink is still replaced by explore."""
+    mild = ChinchillaAgent(sex="F", rng_seed=105, physiology_as_policy=False)
+    mild.hunger = 0.2
+    mild.thirst = 0.2
+    mild.wakefulness.wakefulness = 0.1
+    mild.energy = 1.0
+    assert mild._apply_homeostatic_action_policy("eat") == "explore"
+    assert mild._apply_homeostatic_action_policy("drink") == "explore"
+
+    # Acquire itself never had this gate when the policy is off, including
+    # below the satiety floor. The swap above is what keeps a mild animal away.
+    mild.resources = SharedResources()
+    mild.colony = [mild]
+    mild.position = "bowl_pellets"
+    mild.hunger = 0.01
+    assert mild._try_acquire_resource("food_pellets") is True
+    mild.position = "waterer"
+    mild.thirst = 0.01
+    assert mild._try_acquire_resource("water") is True

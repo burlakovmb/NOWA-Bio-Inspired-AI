@@ -124,14 +124,23 @@ def test_c_eat_and_drink_relieve_before_the_penalty() -> None:
     blocked = ChinchillaAgent(sex="M", rng_seed=4, physiology_as_policy=True)
     blocked.resources = SharedResources(food_pellets=1.0, hay=1.0, water=1.0)
     blocked.colony = [blocked]
+    blocked.position = "bowl_pellets"
     blocked.hunger = HUNGER_AVAILABILITY_THRESHOLD - 0.02
-    blocked.thirst = THIRST_AVAILABILITY_THRESHOLD - 0.02
-    hunger_before = blocked.hunger
-    thirst_before = blocked.thirst
-    assert blocked._try_acquire_resource("food_pellets") is False
-    assert blocked._try_acquire_resource("water") is False
-    assert blocked.hunger == hunger_before
-    assert blocked.thirst == thirst_before
+    blocked.thirst = 0.1
+    assert blocked._try_acquire_resource("food_pellets") is True
+    assert blocked.hunger < HUNGER_AVAILABILITY_THRESHOLD
+
+    sated = ChinchillaAgent(sex="M", rng_seed=4, physiology_as_policy=True)
+    sated.resources = SharedResources(food_pellets=1.0, hay=1.0, water=1.0)
+    sated.colony = [sated]
+    sated.position = "bowl_pellets"
+    sated.hunger = 0.02
+    sated.thirst = 0.02
+    assert sated._try_acquire_resource("food_pellets") is False
+    sated.position = "waterer"
+    assert sated._try_acquire_resource("water") is False
+    assert sated.hunger == 0.02
+    assert sated.thirst == 0.02
 
     thirsty = ChinchillaAgent(sex="F", rng_seed=5, physiology_as_policy=True)
     thirsty.resources = SharedResources(food_pellets=1.0, hay=1.0, water=1.0)

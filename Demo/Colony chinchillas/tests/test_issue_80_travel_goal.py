@@ -355,3 +355,42 @@ def test_travel_is_not_saved_and_a_newborn_starts_without_one(tmp_path) -> None:
     assert agent._travel_action is None
     assert agent._travel_target is None
     assert agent._travel_started_at is None
+
+
+def test_satiety_closes_the_walk_on_the_same_tick() -> None:
+    eater = _walker(position="bowl_pellets", hunger=0.0, thirst=0.2)
+    eater._travel_action = "eat"
+    eater._travel_target = "bowl_pellets"
+    eater._travel_started_at = 0.0
+    eater.replaced_policy_action = "socialize"
+    eater.sim_step(1.25)
+    assert eater._travel_action is None
+    assert eater.resources is not None
+    assert eater.resources.food_pellets == pytest.approx(1.0)
+    assert eater.resources.hay == pytest.approx(1.0)
+
+    drinker = _walker(position="waterer", hunger=0.2, thirst=0.0)
+    drinker._travel_action = "drink"
+    drinker._travel_target = "waterer"
+    drinker._travel_started_at = 0.0
+    drinker.replaced_policy_action = "play"
+    drinker.sim_step(1.25)
+    assert drinker._travel_action is None
+    assert drinker.resources is not None
+    assert drinker.resources.water == pytest.approx(1.0)
+
+
+def test_empty_bowls_close_the_walk_on_the_same_tick() -> None:
+    agent = _walker(position="floor", hunger=0.9, thirst=0.1)
+    assert agent.resources is not None
+    agent.resources.food_pellets = 0.04
+    agent.resources.hay = 0.04
+    agent._travel_action = "eat"
+    agent._travel_target = "bowl_pellets"
+    agent._travel_started_at = 0.0
+    agent.replaced_policy_action = "socialize"
+    agent.sim_step(1.25)
+    assert agent._travel_action is None
+    assert agent.resources.food_pellets == pytest.approx(0.04)
+    assert agent.resources.hay == pytest.approx(0.04)
+    assert agent.position == "floor"

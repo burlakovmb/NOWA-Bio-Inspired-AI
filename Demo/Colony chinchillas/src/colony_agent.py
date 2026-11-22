@@ -100,10 +100,12 @@ HUNGER_NEED_THRESHOLD = 0.6
 HUNGER_CRITICAL_THRESHOLD = 0.85
 THIRST_NEED_THRESHOLD = 0.58
 THIRST_CRITICAL_THRESHOLD = 0.82
-# Eat and drink relieve the need before the unmet-need penalty starts.
-# Below availability there is still no relief (the portion rule).
+# Non-policy homeostatic swap only: below this, eat/drink becomes explore.
 HUNGER_AVAILABILITY_THRESHOLD = 0.50
 THIRST_AVAILABILITY_THRESHOLD = 0.48
+# Policy mode bites on the core's eat/drink. At or under this the body is
+# already full: one portion (relief 0.48 / 0.62) would only clamp.
+POLICY_SATIETY_FLOOR = 0.02
 HUNGER_ACCUMULATION_PER_S = 0.0035
 THIRST_ACCUMULATION_PER_S = 0.0045
 EAT_RELIEF = 0.48
@@ -1083,6 +1085,32 @@ class ChinchillaAgent(Agent):
             if not self._begin_travel("eat"):
                 self._clear_travel_goal()
 
+
+    def _travel_bite_impossible(self, action: str) -> bool:
+        """True when this tick cannot take a portion, so the walk must end.
+
+        Empty bowls and a dry waterer count in both modes. The satiety floor
+        is policy mode only; without the policy the homeostatic swap still
+        uses the availability thresholds.
+        """
+        if self.resources is None:
+            return False
+        if action == "drink":
+            if float(self.resources.water) <= 0.02:
+                return True
+            return (
+                self.physiology_as_policy
+                and _clamp(self.thirst, 0.0, 1.0) <= POLICY_SATIETY_FLOOR
+            )
+        if action != "eat":
+            return False
+        if self._food_stock("food_pellets") <= 0.05 and self._food_stock("hay") <= 0.05:
+            return True
+        return (
+            self.physiology_as_policy
+            and _clamp(self.hunger, 0.0, 1.0) <= POLICY_SATIETY_FLOOR
+        )
+
     def _finish_travel_goal(
         self,
         executed: str,
@@ -1090,27 +1118,30 @@ class ChinchillaAgent(Agent):
         pellets_before: float | None,
         hay_before: float | None,
     ) -> None:
-        """End the walk after one portion, or when the goal has nothing left."""
+        """End the walk after one portion, or when a bite here is impossible."""
         action = self._travel_action
         if action is None or executed != action or self.resources is None:
             return
         if water_before is None or pellets_before is None or hay_before is None:
+            return
+        # Satiety and an empty goal end the walk on this tick. Waiting out
+        # the 15 s timeout would spend the time the animal should be asleep.
+        if self._travel_bite_impossible(action):
+            self._clear_travel_goal()
             return
         target = self._travel_target
         if target is None or str(self.position) != target:
             return
         if action == "drink":
             took = float(self.resources.water) < float(water_before) - 1e-12
-            dry = float(self.resources.water) <= 0.02
-            if took or dry:
+            if took:
                 self._clear_travel_goal()
             return
         took = (
             float(self.resources.food_pellets) < float(pellets_before) - 1e-12
             or float(self.resources.hay) < float(hay_before) - 1e-12
         )
-        nothing = self._food_stock("food_pellets") <= 0.05 and self._food_stock("hay") <= 0.05
-        if took or nothing:
+        if took:
             self._clear_travel_goal()
 
     def _describe_homeostatic_override(self, before: str, after: str) -> str:
@@ -2883,9 +2914,9 @@ class ChinchillaAgent(Agent):
                     self._resource_block_feedback_at[resource] = float(self.sim_time)
             return acquired
         if resource == "food_pellets":
-            # A full sip every tick empties the shared bowl when the step is
-            # shorter than the need. Drink and eat only when there is a deficit.
-            if self.physiology_as_policy and not self._needs_eat_action():
+            # Policy mode trusts the chosen eat. Stop only at physical satiety:
+            # hunger at or under 0.02 has no deficit a bite can fill.
+            if self.physiology_as_policy and _clamp(self.hunger, 0.0, 1.0) <= POLICY_SATIETY_FLOOR:
                 return False
             # The bite comes from the bowl underfoot. 0.05 is that bowl's
             # stock, not the sum, and the other bowl is not a backup.
@@ -2907,7 +2938,8 @@ class ChinchillaAgent(Agent):
             self._apply_affect_impulse(stress=0.2, valence=-0.3, intensity=0.8)
             return False
         if resource == "water":
-            if self.physiology_as_policy and not self._needs_drink_action():
+            # Same satiety line as food: thirst at or under 0.02 is already full.
+            if self.physiology_as_policy and _clamp(self.thirst, 0.0, 1.0) <= POLICY_SATIETY_FLOOR:
                 return False
             if str(self.position) != "waterer":
                 return False
