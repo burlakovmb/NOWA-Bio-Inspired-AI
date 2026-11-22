@@ -178,6 +178,13 @@ class SleepManager:
         self.intent_memory = intent_memory
         # ChainMemory for Plan B temporal chains
         self.chain_memory = ChainMemory()
+        # Stable action-visit counts (the agent's _action_visit_counts), issue #86: every visit_halving_sleeps nights
+        # the counts of contexts not visited for that long are halved, and the table is capped at visit_capacity
+        # rows. A context the agent stopped visiting slowly becomes novel again; one in use keeps its counts.
+        self.visit_halving_sleeps: int = 8
+        self.visit_capacity: int = 4096
+        # context -> night it was last visited (bookkeeping, not saved)
+        self._visit_context_night: Dict[str, int] = {}
         self.clustering_similarity_threshold = clustering_similarity_threshold
         self.forget_stability_threshold = forget_stability_threshold
         self.consolidation_cycles = 0
@@ -3015,6 +3022,9 @@ class SleepManager:
         counts = getattr(host, "_action_visit_counts", None)
         if labile is None or not hasattr(labile, "take_visits") or not isinstance(counts, dict):
             return
+        memory = getattr(self, "chain_memory", None)
+        night = int(getattr(memory, "sleep_index", 0))
+        renewed = self.__dict__.setdefault("_visit_context_night", {})
         for key, count in labile.take_visits().items():
             if not isinstance(key, tuple) or len(key) != 2:
                 continue
@@ -3026,6 +3036,7 @@ class SleepManager:
                 continue
             token = (str(key[0]), str(key[1]))
             counts[token] = int(counts.get(token, 0)) + add
+            renewed[token[0]] = night  # the context was visited this night (issue #86: only stale contexts fade)
 
     def _consolidate_two_tier_once(self) -> None:
         """One pass per sleep: capture, habits, Go/NoGo, slow stats, visits.
@@ -3052,6 +3063,43 @@ class SleepManager:
         if host is not None and hasattr(host, "_replay_slow_affect"):
             host._replay_slow_affect()
         self._transfer_labile_visits()
+
+    def _close_night(self) -> Dict[str, int]:
+        """End of a night: forget weak temporal chains and fade stable visit counts (issue #86).
+
+        Runs once per deep_sleep, after the cycles, inside learning_allowed(): it rewrites stable memory.
+        """
+        stats = {"chains_pruned": 0, "chains_evicted": 0, "visit_rows_dropped": 0}
+        memory = getattr(self, "chain_memory", None)
+        night = int(getattr(memory, "sleep_index", 0))
+        if memory is not None and hasattr(memory, "close_night"):
+            stats.update(memory.close_night())
+        host = getattr(self, "_host_agent", None)
+        counts = getattr(host, "_action_visit_counts", None)
+        if not isinstance(counts, dict) or not counts:
+            return stats
+        before = len(counts)
+        period = int(getattr(self, "visit_halving_sleeps", 0) or 0)
+        if period > 0 and (night + 1) % period == 0:
+            # Only contexts not visited for a whole period fade: halving the counts of a context the agent keeps
+            # visiting would re-inflate its exploration bonus and pull it off what it has learned. A context with
+            # no record yet (e.g. right after loading a save) counts as visited now.
+            renewed = self.__dict__.setdefault("_visit_context_night", {})
+            for key in list(counts):
+                if night - renewed.setdefault(key[0], night) < period:
+                    continue
+                halved = int(counts[key]) // 2
+                if halved > 0:
+                    counts[key] = halved
+                else:
+                    del counts[key]
+        capacity = int(getattr(self, "visit_capacity", 0) or 0)
+        excess = len(counts) - capacity
+        if capacity > 0 and excess > 0:
+            for key, _count in sorted(counts.items(), key=lambda item: (int(item[1]), item[0]))[:excess]:
+                del counts[key]
+        stats["visit_rows_dropped"] = before - len(counts)
+        return stats
 
     def _mark_two_tier_batch(self) -> int:
         batch = list(getattr(self, "_two_tier_batch", []) or [])
@@ -3304,6 +3352,8 @@ class SleepManager:
 
         marked = self._mark_two_tier_batch()
         total_stats["two_tier_consolidated"] = int(marked)
+        with learning_allowed():
+            total_stats.update(self._close_night())
         return total_stats
 
     def _estimate_mean_ach(self, experiences: Optional[List] = None) -> float:
