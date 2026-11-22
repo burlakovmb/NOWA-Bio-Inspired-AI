@@ -139,7 +139,6 @@ Earlier vs `main` baseline (`89c10a0`): empty-bowl time and hunger-dominated str
 
 - **Mean sleepers ~1.2 vs ~2.2** before “eat only at the bowl” — not explained by stuck travel goals (timeouts and same-tick `_travel_bite_impossible` clear walks). QA analysis: travel hold keeps `eat`/`drink` executed longer; walks that start below the bite gate can sit at a full bowl until timeout. Tracked as a **separate task**, not a blocker for #80 behavior.
 - **Action duration** while eating/drinking (#56, beyond travel hold) — out of this PR.
-- Branch may lag `main` on unrelated `src/storage.py` (issue #87); PR diff `origin/main...HEAD -- src/` for #80 commits remains empty.
 
 ---
 
