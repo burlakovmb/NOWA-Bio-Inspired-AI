@@ -45,14 +45,23 @@ class SharedResources:
         elif resource == "dustbath" and self.dustbath_lock == agent_id:
             self.dustbath_lock = None
 
-    def consume_food(self, amount: float, *, primary: str | None = None) -> bool:
+    def consume_food(
+        self,
+        amount: float,
+        *,
+        primary: str | None = None,
+        strict: bool = False,
+    ) -> bool:
         """
         Consume food from pellets/hay with optional primary preference.
 
         If `primary` is not provided and both sources are available, consumption
         starts with an equal split and then uses the source with remaining stock.
 
-        Returns False only when both pools are empty.
+        `strict=False` keeps that shared-pool behavior and returns False only
+        when both pools are empty. `strict=True` takes only from `primary`
+        and does not top up from the other bowl. It returns False when that
+        bowl cannot provide a bite.
         """
         try:
             requested = max(0.0, float(amount))
@@ -81,6 +90,11 @@ class SharedResources:
             taken = min(current, amount_to_take)
             self.food_pellets = max(0.0, current - taken)
             return taken
+
+        if strict:
+            if primary not in {"food_pellets", "hay"}:
+                return False
+            return _take_from(str(primary), remaining) > 0.0
 
         if primary in {"food_pellets", "hay"}:
             order = [str(primary), "hay" if primary == "food_pellets" else "food_pellets"]

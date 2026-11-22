@@ -1091,6 +1091,54 @@ class ChinchillaAgent(Agent):
             return preferred
         return None
 
+    def _food_stock(self, source: str | None) -> float:
+        if self.resources is None or source not in {"food_pellets", "hay"}:
+            return 0.0
+        attr = "hay" if source == "hay" else "food_pellets"
+        try:
+            raw = float(getattr(self.resources, attr, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return _clamp(raw, 0.0, 1.0)
+
+    def _food_zone_for_source(self, source: str | None) -> str | None:
+        if source == "food_pellets":
+            return "bowl_pellets"
+        if source == "hay":
+            return "bowl_hay"
+        return None
+
+    def _food_source_here(self) -> str | None:
+        if self.position == "bowl_pellets":
+            return "food_pellets"
+        if self.position == "bowl_hay":
+            return "hay"
+        return None
+
+    def _eat_travel_zone(self) -> str | None:
+        """Bowl to walk to. None when the bowl underfoot can be eaten, or none can.
+
+        The favorite comes from ``_food_primary_source``. A bowl at or under
+        0.05 is not a bite, so an empty bowl sends the animal to the other
+        one when that one is above the same threshold.
+        """
+        here = self._food_source_here()
+        if here is not None and self._food_stock(here) > 0.05:
+            return None
+        if here is not None:
+            other = "hay" if here == "food_pellets" else "food_pellets"
+            if self._food_stock(other) > 0.05:
+                return self._food_zone_for_source(other)
+            return None
+        primary = self._food_primary_source()
+        if self._food_stock(primary) > 0.05:
+            return self._food_zone_for_source(primary)
+        if primary in {"food_pellets", "hay"}:
+            other = "hay" if primary == "food_pellets" else "food_pellets"
+            if self._food_stock(other) > 0.05:
+                return self._food_zone_for_source(other)
+        return None
+
     def _apply_homeostatic_action_policy(self, action: str) -> str:
         normalized = str(action or "idle")
 
@@ -1335,11 +1383,18 @@ class ChinchillaAgent(Agent):
             self._wheel_run_started_at = None
 
         if action == "eat":
+            # Move first. A step that lands on the bowl feeds in this same
+            # tick. Food is not taken, and hunger does not fall, until then.
+            travel = self._eat_travel_zone()
+            if travel is not None and self.position != travel:
+                self._move_towards_any([travel])
             self._try_acquire_resource("food_pellets")
-            self._move_towards_any(["bowl_pellets", "bowl_hay"])
         elif action == "drink":
-            self._try_acquire_resource("water")
-            self._move_towards_any(["waterer", "bowl_hay"])
+            # The waterer is the only drink. bowl_hay is just the graph hop.
+            if self.position != "waterer":
+                self._move_towards_any(["waterer"])
+            if self.position == "waterer":
+                self._try_acquire_resource("water")
         elif action == "run_wheel":
             if self.position == "wheel" and self.resources and self.resources.wheel_lock == self.agent_id:
                 if self._wheel_run_started_at is None:
@@ -2178,8 +2233,8 @@ class ChinchillaAgent(Agent):
             return
 
         # Bowls lose food and water only in _try_acquire_resource, when the
-        # animal actually eats or drinks. An empty bowl still costs energy
-        # and affect; being awake does not sip the shared stock.
+        # animal eats at that bowl or drinks at the waterer. An empty bowl
+        # still costs energy and affect; being awake does not sip the stock.
         pellets = max(0.0, float(self.resources.food_pellets))
         hay = max(0.0, float(self.resources.hay))
         if pellets + hay <= 0.0:
@@ -2656,17 +2711,29 @@ class ChinchillaAgent(Agent):
             # shorter than the need. Drink and eat only when there is a deficit.
             if self.physiology_as_policy and not self._needs_eat_action():
                 return False
-            if self._food_availability() > 0.05:
-                self.resources.consume_food(
+            # The bite comes from the bowl underfoot. 0.05 is that bowl's
+            # stock, not the sum, and the other bowl is not a backup.
+            here = self._food_source_here()
+            if here is not None and self._food_stock(here) > 0.05:
+                consumed = self.resources.consume_food(
                     0.003 * RESOURCE_CONSUMPTION_MULTIPLIER,
-                    primary=self._food_primary_source(),
+                    primary=here,
+                    strict=True,
                 )
+                if not consumed:
+                    return False
                 self.hunger = _clamp(self.hunger - EAT_RELIEF, 0.0, 1.0)
                 return True
+            # On the way to a bowl that still has food. A path, not a refusal,
+            # so the "no food" impulse stays off.
+            if self._food_availability() > 0.05:
+                return False
             self._apply_affect_impulse(stress=0.2, valence=-0.3, intensity=0.8)
             return False
         if resource == "water":
             if self.physiology_as_policy and not self._needs_drink_action():
+                return False
+            if str(self.position) != "waterer":
                 return False
             if self.resources.water > 0.02:
                 self.resources.water = max(

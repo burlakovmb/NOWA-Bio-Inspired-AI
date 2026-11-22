@@ -127,6 +127,12 @@ def test_eat_and_drink_events_match_the_bowl_on_a_metabolism_tick(monkeypatch) -
     start_water = float(runner.resources.water)
 
     def _feed_and_water() -> None:
+        # The bite lands only at the bowl and the waterer. Pin them there
+        # for this accounting tick; the walk itself is covered below.
+        eater.position = "bowl_pellets"
+        eater._last_position_change_time = eater.sim_time
+        drinker.position = "waterer"
+        drinker._last_position_change_time = drinker.sim_time
         eater.hunger = 0.8
         eater.thirst = 0.1
         eater.replaced_policy_action = "eat"
@@ -236,3 +242,199 @@ def test_sleep_still_skips_the_empty_bowl_penalty_and_the_bowls() -> None:
     assert agent.energy == 0.5
     assert agent.hunger == pytest.approx(0.2 + HUNGER_ACCUMULATION_PER_S)
     assert agent.thirst == pytest.approx(0.2 + THIRST_ACCUMULATION_PER_S)
+
+
+def _hungry(
+    *,
+    position: str,
+    pellets: float = 1.0,
+    hay: float = 1.0,
+    water: float = 1.0,
+    seed: int = 80,
+    hunger: float = 0.9,
+    thirst: float = 0.9,
+) -> ChinchillaAgent:
+    """Agent allowed to step once. sim_time is inside the move window and short of unstick."""
+    agent = ChinchillaAgent(sex="F", rng_seed=seed, physiology_as_policy=True, position=position)
+    agent.resources = SharedResources(food_pellets=pellets, hay=hay, water=water)
+    agent.colony = [agent]
+    agent.hunger = hunger
+    agent.thirst = thirst
+    agent.energy = 1.0
+    agent.is_sleeping = False
+    agent.current_action = "explore"
+    agent.sim_time = 5.0
+    agent._last_position_change_time = 0.0
+    return agent
+
+
+def test_eat_from_house_or_wheel_walks_and_does_not_take_food() -> None:
+    """Not at a bowl yet: one eat step moves closer and leaves both bowls alone.
+
+    ``floor`` is one hop from either bowl, so that start is the arrival tick
+    below. ``house`` and ``wheel`` still have a hop in between.
+    """
+    for start in ("house", "wheel"):
+        agent = _hungry(position=start, seed=90)
+        agent._food_source_preference = "food_pellets"
+        hunger = agent.hunger
+        before = dict(agent.affective_space.axes)
+        agent._interpret_action("eat")
+        assert agent.position == "floor"
+        assert agent.resources.food_pellets == 1.0
+        assert agent.resources.hay == 1.0
+        assert agent.hunger == hunger
+        assert agent.affective_space.axes == pytest.approx(before)
+
+
+def test_eat_from_the_floor_arrives_and_takes_one_portion() -> None:
+    agent = _hungry(position="floor", seed=91)
+    agent._food_source_preference = "food_pellets"
+    agent._interpret_action("eat")
+    assert agent.position == "bowl_pellets"
+    assert agent.resources.food_pellets == pytest.approx(1.0 - BITE)
+    assert agent.resources.hay == 1.0
+    assert agent.hunger == pytest.approx(0.9 - EAT_RELIEF)
+
+
+def test_eat_at_the_pellet_bowl_takes_only_pellets_even_if_hay_is_preferred() -> None:
+    agent = _hungry(position="bowl_pellets", seed=92)
+    agent._food_source_preference = "hay"
+    agent._interpret_action("eat")
+    assert agent.position == "bowl_pellets"
+    assert agent.resources.food_pellets == pytest.approx(1.0 - BITE)
+    assert agent.resources.hay == 1.0
+    assert agent.hunger == pytest.approx(0.9 - EAT_RELIEF)
+
+
+def test_eat_at_the_hay_bowl_takes_only_hay() -> None:
+    agent = _hungry(position="bowl_hay", seed=93)
+    agent._food_source_preference = "food_pellets"
+    agent._interpret_action("eat")
+    assert agent.position == "bowl_hay"
+    assert agent.resources.hay == pytest.approx(1.0 - BITE)
+    assert agent.resources.food_pellets == 1.0
+    assert agent.hunger == pytest.approx(0.9 - EAT_RELIEF)
+
+
+def test_empty_favorite_is_left_for_the_other_bowl_and_eaten_there() -> None:
+    agent = _hungry(position="floor", pellets=0.0, hay=1.0, seed=94)
+    agent._food_source_preference = "food_pellets"
+    agent._interpret_action("eat")
+    assert agent.position == "bowl_hay"
+    assert agent.resources.food_pellets == 0.0
+    assert agent.resources.hay == pytest.approx(1.0 - BITE)
+    assert agent.hunger == pytest.approx(0.9 - EAT_RELIEF)
+
+
+def test_standing_at_an_empty_bowl_walks_to_the_other_and_eats() -> None:
+    agent = _hungry(position="bowl_pellets", pellets=0.0, hay=1.0, seed=95)
+    agent._food_source_preference = "food_pellets"
+    agent._interpret_action("eat")
+    assert agent.position == "bowl_hay"
+    assert agent.resources.food_pellets == 0.0
+    assert agent.resources.hay == pytest.approx(1.0 - BITE)
+    assert agent.hunger == pytest.approx(0.9 - EAT_RELIEF)
+
+
+def test_thin_bowl_is_not_eaten_and_the_other_bowl_is() -> None:
+    """0.05 is not enough to bite. The other bowl, above that line, is."""
+    agent = _hungry(position="bowl_pellets", pellets=0.05, hay=1.0, seed=96)
+    agent._interpret_action("eat")
+    assert agent.position == "bowl_hay"
+    assert agent.resources.food_pellets == 0.05
+    assert agent.resources.hay == pytest.approx(1.0 - BITE)
+    assert agent.hunger == pytest.approx(0.9 - EAT_RELIEF)
+
+
+def test_both_bowls_empty_keeps_the_no_food_impulse_and_takes_nothing() -> None:
+    refused = _hungry(position="bowl_pellets", pellets=0.0, hay=0.0, seed=97)
+    twin = _hungry(position="bowl_pellets", pellets=0.0, hay=0.0, seed=97)
+    refused._interpret_action("eat")
+    twin._apply_affect_impulse(stress=0.2, valence=-0.3, intensity=0.8)
+    assert refused.position == "bowl_pellets"
+    assert refused.resources.food_pellets == 0.0
+    assert refused.resources.hay == 0.0
+    assert refused.hunger == 0.9
+    assert refused.affective_space.axes == pytest.approx(twin.affective_space.axes)
+
+
+def test_walking_to_food_does_not_apply_the_no_food_impulse() -> None:
+    agent = _hungry(position="house", seed=98)
+    before = dict(agent.affective_space.axes)
+    agent._interpret_action("eat")
+    assert agent.position == "floor"
+    assert agent.resources.food_pellets == 1.0
+    assert agent.resources.hay == 1.0
+    assert agent.hunger == 0.9
+    assert agent.affective_space.axes == pytest.approx(before)
+
+
+def test_strict_consume_does_not_top_up_the_other_bowl() -> None:
+    short = SharedResources(food_pellets=0.004, hay=1.0)
+    assert short.consume_food(0.02, primary="food_pellets", strict=True) is True
+    assert short.food_pellets == 0.0
+    assert short.hay == 1.0
+
+    empty = SharedResources(food_pellets=0.0, hay=1.0)
+    assert empty.consume_food(0.02, primary="food_pellets", strict=True) is False
+    assert empty.food_pellets == 0.0
+    assert empty.hay == 1.0
+
+    shared = SharedResources(food_pellets=0.004, hay=1.0)
+    assert shared.consume_food(0.02, primary="food_pellets", strict=False) is True
+    assert shared.food_pellets == 0.0
+    assert shared.hay == pytest.approx(1.0 - 0.016)
+
+    enough = SharedResources(food_pellets=1.0, hay=1.0)
+    assert enough.consume_food(0.02, primary="food_pellets", strict=False) is True
+    assert enough.food_pellets == pytest.approx(0.98)
+    assert enough.hay == 1.0
+
+
+def test_drink_while_still_at_bowl_hay_does_not_take_water() -> None:
+    """bowl_hay is not the waterer. With the move interval closed, nothing is drunk."""
+    agent = _hungry(position="bowl_hay", seed=99)
+    agent.sim_time = 0.0
+    agent._last_position_change_time = 0.0
+    agent._interpret_action("drink")
+    assert agent.position == "bowl_hay"
+    assert agent.resources.water == 1.0
+    assert agent.thirst == 0.9
+
+
+def test_drink_from_the_floor_stops_at_bowl_hay_without_taking_water() -> None:
+    agent = _hungry(position="floor", seed=100)
+    agent._interpret_action("drink")
+    assert agent.position == "bowl_hay"
+    assert agent.resources.water == 1.0
+    assert agent.thirst == 0.9
+
+
+def test_drink_arriving_from_bowl_hay_takes_one_portion() -> None:
+    agent = _hungry(position="bowl_hay", seed=101)
+    agent._interpret_action("drink")
+    assert agent.position == "waterer"
+    assert agent.resources.water == pytest.approx(1.0 - BITE)
+    assert agent.thirst == pytest.approx(0.9 - DRINK_RELIEF)
+
+
+def test_drink_at_the_waterer_takes_one_portion() -> None:
+    agent = _hungry(position="waterer", seed=102)
+    agent._interpret_action("drink")
+    assert agent.position == "waterer"
+    assert agent.resources.water == pytest.approx(1.0 - BITE)
+    assert agent.thirst == pytest.approx(0.9 - DRINK_RELIEF)
+
+
+def test_needs_gate_still_blocks_a_bite_at_the_bowl() -> None:
+    agent = _hungry(position="bowl_pellets", hunger=0.2, thirst=0.2, seed=103)
+    agent.position = "bowl_pellets"
+    agent._interpret_action("eat")
+    assert agent.resources.food_pellets == 1.0
+    assert agent.resources.hay == 1.0
+    assert agent.hunger == 0.2
+    agent.position = "waterer"
+    agent._interpret_action("drink")
+    assert agent.resources.water == 1.0
+    assert agent.thirst == 0.2
