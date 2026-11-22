@@ -92,6 +92,8 @@ COLONY_BODY_STEP_S = 1.0 / 12.0
 NEWBORN_ENERGY = 1.0
 STUCK_MOVE_TIMEOUT_S = 10.0
 MIN_ACTION_MOVE_INTERVAL_S = 1.25
+# A walk to a bowl or the waterer is held this long, then the core chooses again.
+TRAVEL_GOAL_TIMEOUT_S = 15.0
 RESOURCE_BLOCK_FEEDBACK_COOLDOWN_S = 4.0
 WHEEL_RUN_MAX_CONTINUOUS_S = 18.0
 HUNGER_NEED_THRESHOLD = 0.6
@@ -429,6 +431,10 @@ class ChinchillaAgent(Agent):
         self.thirst: float = _clamp(0.18 + (self._rng.random() * 0.12), 0.0, 1.0)
         self.scent_signature: str = hashlib.sha1(self.agent_id.encode()).hexdigest()[:8]
         self._last_position_change_time: float = 0.0
+        # Walk to a bowl or the waterer. Not saved: a loaded agent starts without one.
+        self._travel_action: str | None = None
+        self._travel_target: str | None = None
+        self._travel_started_at: float | None = None
 
         self.pending_offer: PendingOffer | None = None
         self._offer_cooldowns: dict[str, float] = {}
@@ -667,7 +673,14 @@ class ChinchillaAgent(Agent):
                 context_events,
             )
         before = self._physiology_snapshot()
+        if self.resources is None:
+            water_before = pellets_before = hay_before = None
+        else:
+            water_before = float(self.resources.water)
+            pellets_before = float(self.resources.food_pellets)
+            hay_before = float(self.resources.hay)
         self._interpret_action(executed)
+        self._finish_travel_goal(executed, water_before, pellets_before, hay_before)
         self._social_step()
         self._apply_sleep_recovery(dt)
         reward = self._compute_reward(before=before, executed_action=executed)
@@ -921,11 +934,27 @@ class ChinchillaAgent(Agent):
         decided: str,
         context_events: list[str],
     ) -> tuple[str, bool, str | None]:
-        """Apply reflex and homeostatic overrides to the core's choice."""
+        """Apply reflex, homeostatic, and travel overrides to the core's choice.
+
+        The core decision is unchanged. A walk to food or water holds the
+        executed action until the animal bites, the bowl is empty, the walk
+        times out, or a reflex, alarm, or sleep bout cancels it.
+        """
         action = str(decided or "idle")
         overridden = False
         source: str | None = None
+        events = set(context_events or [])
+        cooldown_before = dict(self._reflex_last_activation)
         reflex_action, reflex_id = self._select_unconditioned_reflex_detail(context_events)
+        # Thirst and hunger already raise stress on every tick. panic_hide
+        # would then turn the walk around before the second hop, and a short
+        # dt does it sooner. That stress is the need the walk is serving.
+        # Alarm and any other shelter cue still win, and the cooldown stays
+        # free for them.
+        if self._reflex_is_only_need_stress(reflex_action, reflex_id, events):
+            self._reflex_last_activation.clear()
+            self._reflex_last_activation.update(cooldown_before)
+            reflex_action, reflex_id = None, None
         if reflex_action is not None and reflex_action != action:
             action = reflex_action
             overridden = True
@@ -938,7 +967,174 @@ class ChinchillaAgent(Agent):
             source = self._describe_homeostatic_override(action, gated)
             action = gated
             overridden = True
+
+        reflex_breaks_travel = reflex_action in {"hide", "flee"} or (
+            reflex_action is not None
+            and self._travel_action is not None
+            and reflex_action != self._travel_action
+        )
+        if action == "sleep" or "alarm_call" in events or reflex_breaks_travel:
+            self._clear_travel_goal()
+            return action, overridden, source
+
+        if self._travel_timed_out():
+            self._clear_travel_goal()
+
+        self._redirect_travel_for_critical_need()
+        if self._travel_action is not None:
+            self._refresh_travel_target()
+            if self._travel_action is not None:
+                return (
+                    self._travel_action,
+                    True,
+                    f"homeostatic:travel_{self._travel_action}",
+                )
+
+        if action in {"eat", "drink"} and not self._at_consumption_goal(action):
+            if self._begin_travel(action):
+                return action, True, f"homeostatic:travel_{action}"
         return action, overridden, source
+
+    def _reflex_is_only_need_stress(
+        self,
+        reflex_action: str | None,
+        reflex_id: str | None,
+        events: set[str],
+    ) -> bool:
+        """True when a shelter reflex matched nothing but the walk's own stress."""
+        if self._travel_action is None or reflex_action not in {"hide", "flee"}:
+            return False
+        if "alarm_call" in events:
+            return False
+        reflex = next(
+            (item for item in self.unconditioned_reflexes if item.reflex_id == reflex_id),
+            None,
+        )
+        if reflex is None:
+            return False
+        matched = (set(reflex.trigger_any) | set(reflex.trigger_all)) & set(events)
+        return matched == {"high_stress"}
+
+    def _clear_travel_goal(self) -> None:
+        self._travel_action = None
+        self._travel_target = None
+        self._travel_started_at = None
+
+    def _travel_timed_out(self) -> bool:
+        started = self._travel_started_at
+        if started is None or self._travel_action is None:
+            return False
+        return (float(self.sim_time) - float(started)) >= TRAVEL_GOAL_TIMEOUT_S
+
+    def _at_consumption_goal(self, action: str) -> bool:
+        """True when this tick can bite without walking further."""
+        if action == "drink":
+            return str(self.position) == "waterer"
+        if action != "eat":
+            return False
+        here = self._food_source_here()
+        return here is not None and self._food_stock(here) > 0.05
+
+    def _begin_travel(self, action: str) -> bool:
+        """Remember a walk. False when eat has no bowl left to walk to."""
+        if action == "drink":
+            target: str | None = "waterer"
+        elif action == "eat":
+            target = self._eat_travel_zone()
+            if target is None and self._at_consumption_goal("eat"):
+                target = str(self.position)
+        else:
+            return False
+        if not target:
+            return False
+        self._travel_action = action
+        self._travel_target = target
+        self._travel_started_at = float(self.sim_time)
+        return True
+
+    def _refresh_travel_target(self) -> None:
+        """Eat aim follows the bowls. A dry pair ends the walk after this bite attempt."""
+        if self._travel_action == "drink":
+            self._travel_target = "waterer"
+            return
+        if self._travel_action != "eat":
+            return
+        zone = self._eat_travel_zone()
+        if zone is not None:
+            self._travel_target = zone
+            return
+        if self._at_consumption_goal("eat") or self._food_availability() <= 0.05:
+            self._travel_target = str(self.position)
+
+    def _redirect_travel_for_critical_need(self) -> None:
+        """Critical thirst replaces a food walk; critical hunger replaces a drink walk."""
+        if self._travel_action is None:
+            return
+        thirst = _clamp(self.thirst, 0.0, 1.0)
+        hunger = _clamp(self.hunger, 0.0, 1.0)
+        if self._travel_action == "eat" and thirst >= THIRST_CRITICAL_THRESHOLD:
+            self._begin_travel("drink")
+            return
+        if (
+            self._travel_action == "drink"
+            and hunger >= HUNGER_CRITICAL_THRESHOLD
+            and thirst < THIRST_CRITICAL_THRESHOLD
+        ):
+            if not self._begin_travel("eat"):
+                self._clear_travel_goal()
+
+
+    def _travel_bite_impossible(self, action: str) -> bool:
+        """True when this tick cannot take a portion, so the walk must end.
+
+        Empty bowls and a dry waterer count in both modes. In policy mode a
+        need under 0.50 / 0.48 (lower when pregnant) is the same refusal as
+        ``_try_acquire_resource``, so the walk does not wait out 15 s.
+        """
+        if self.resources is None:
+            return False
+        if action == "drink":
+            if float(self.resources.water) <= 0.02:
+                return True
+            return self.physiology_as_policy and not self._needs_drink_action()
+        if action != "eat":
+            return False
+        if self._food_stock("food_pellets") <= 0.05 and self._food_stock("hay") <= 0.05:
+            return True
+        return self.physiology_as_policy and not self._needs_eat_action()
+
+    def _finish_travel_goal(
+        self,
+        executed: str,
+        water_before: float | None,
+        pellets_before: float | None,
+        hay_before: float | None,
+    ) -> None:
+        """End the walk after one portion, or when a bite here is impossible."""
+        action = self._travel_action
+        if action is None or executed != action or self.resources is None:
+            return
+        if water_before is None or pellets_before is None or hay_before is None:
+            return
+        # A need under the availability line, or an empty goal, ends the walk
+        # on this tick. Waiting out the 15 s timeout would spend sleep.
+        if self._travel_bite_impossible(action):
+            self._clear_travel_goal()
+            return
+        target = self._travel_target
+        if target is None or str(self.position) != target:
+            return
+        if action == "drink":
+            took = float(self.resources.water) < float(water_before) - 1e-12
+            if took:
+                self._clear_travel_goal()
+            return
+        took = (
+            float(self.resources.food_pellets) < float(pellets_before) - 1e-12
+            or float(self.resources.hay) < float(hay_before) - 1e-12
+        )
+        if took:
+            self._clear_travel_goal()
 
     def _describe_homeostatic_override(self, before: str, after: str) -> str:
         wakefulness_value = _clamp(float(self.wakefulness.wakefulness), 0.0, 1.0)
@@ -1089,6 +1285,54 @@ class ChinchillaAgent(Agent):
         preferred = str(getattr(self, "_food_source_preference", "food_pellets"))
         if preferred in {"food_pellets", "hay"}:
             return preferred
+        return None
+
+    def _food_stock(self, source: str | None) -> float:
+        if self.resources is None or source not in {"food_pellets", "hay"}:
+            return 0.0
+        attr = "hay" if source == "hay" else "food_pellets"
+        try:
+            raw = float(getattr(self.resources, attr, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return _clamp(raw, 0.0, 1.0)
+
+    def _food_zone_for_source(self, source: str | None) -> str | None:
+        if source == "food_pellets":
+            return "bowl_pellets"
+        if source == "hay":
+            return "bowl_hay"
+        return None
+
+    def _food_source_here(self) -> str | None:
+        if self.position == "bowl_pellets":
+            return "food_pellets"
+        if self.position == "bowl_hay":
+            return "hay"
+        return None
+
+    def _eat_travel_zone(self) -> str | None:
+        """Bowl to walk to. None when the bowl underfoot can be eaten, or none can.
+
+        The favorite comes from ``_food_primary_source``. A bowl at or under
+        0.05 is not a bite, so an empty bowl sends the animal to the other
+        one when that one is above the same threshold.
+        """
+        here = self._food_source_here()
+        if here is not None and self._food_stock(here) > 0.05:
+            return None
+        if here is not None:
+            other = "hay" if here == "food_pellets" else "food_pellets"
+            if self._food_stock(other) > 0.05:
+                return self._food_zone_for_source(other)
+            return None
+        primary = self._food_primary_source()
+        if self._food_stock(primary) > 0.05:
+            return self._food_zone_for_source(primary)
+        if primary in {"food_pellets", "hay"}:
+            other = "hay" if primary == "food_pellets" else "food_pellets"
+            if self._food_stock(other) > 0.05:
+                return self._food_zone_for_source(other)
         return None
 
     def _apply_homeostatic_action_policy(self, action: str) -> str:
@@ -1326,6 +1570,8 @@ class ChinchillaAgent(Agent):
         return selected.action, selected.reflex_id
 
     def _interpret_action(self, action: str) -> None:
+        if action == "sleep":
+            self._clear_travel_goal()
         was_sleeping = self.is_sleeping
         self.current_action = action
         if action != "sleep":
@@ -1335,11 +1581,18 @@ class ChinchillaAgent(Agent):
             self._wheel_run_started_at = None
 
         if action == "eat":
+            # Move first. A step that lands on the bowl feeds in this same
+            # tick. Food is not taken, and hunger does not fall, until then.
+            travel = self._eat_travel_zone()
+            if travel is not None and self.position != travel:
+                self._move_towards_any([travel])
             self._try_acquire_resource("food_pellets")
-            self._move_towards_any(["bowl_pellets", "bowl_hay"])
         elif action == "drink":
-            self._try_acquire_resource("water")
-            self._move_towards_any(["waterer", "bowl_hay"])
+            # The waterer is the only drink. bowl_hay is just the graph hop.
+            if self.position != "waterer":
+                self._move_towards_any(["waterer"])
+            if self.position == "waterer":
+                self._try_acquire_resource("water")
         elif action == "run_wheel":
             if self.position == "wheel" and self.resources and self.resources.wheel_lock == self.agent_id:
                 if self._wheel_run_started_at is None:
@@ -2177,10 +2430,12 @@ class ChinchillaAgent(Agent):
         if self.is_sleeping or self.current_action == "sleep":
             return
 
-        if not self.resources.consume_food(
-            0.0003 * RESOURCE_CONSUMPTION_MULTIPLIER,
-            primary=self._food_primary_source(),
-        ):
+        # Bowls lose food and water only in _try_acquire_resource, when the
+        # animal eats at that bowl or drinks at the waterer. An empty bowl
+        # still costs energy and affect; being awake does not sip the stock.
+        pellets = max(0.0, float(self.resources.food_pellets))
+        hay = max(0.0, float(self.resources.hay))
+        if pellets + hay <= 0.0:
             self._apply_affect_impulse(stress=0.02, valence=-0.02, intensity=0.5)
             # Apply direct energy penalty when food is unavailable so that
             # resource scarcity affects physiology (can lead to death).
@@ -2190,11 +2445,7 @@ class ChinchillaAgent(Agent):
             except Exception:
                 pass
 
-        self.resources.water = max(
-            0.0,
-            self.resources.water - (0.0001 * RESOURCE_CONSUMPTION_MULTIPLIER),
-        )
-        if self.resources.water <= 0.0:
+        if float(self.resources.water) <= 0.0:
             self._apply_affect_impulse(stress=0.02, intensity=0.4)
             try:
                 penalty = WATER_MISSING_ENERGY_PENALTY_PER_S * float(RESOURCE_CONSUMPTION_MULTIPLIER)
@@ -2359,6 +2610,7 @@ class ChinchillaAgent(Agent):
         if is_dead:
             self.current_action = "dead"
             self.is_sleeping = True
+            self._clear_travel_goal()
 
     def _capture_conception_genome(self, male_id: str) -> None:
         """Keep the father's genome from the moment of conception."""
@@ -2658,17 +2910,29 @@ class ChinchillaAgent(Agent):
             # shorter than the need. Drink and eat only when there is a deficit.
             if self.physiology_as_policy and not self._needs_eat_action():
                 return False
-            if self._food_availability() > 0.05:
-                self.resources.consume_food(
+            # The bite comes from the bowl underfoot. 0.05 is that bowl's
+            # stock, not the sum, and the other bowl is not a backup.
+            here = self._food_source_here()
+            if here is not None and self._food_stock(here) > 0.05:
+                consumed = self.resources.consume_food(
                     0.003 * RESOURCE_CONSUMPTION_MULTIPLIER,
-                    primary=self._food_primary_source(),
+                    primary=here,
+                    strict=True,
                 )
+                if not consumed:
+                    return False
                 self.hunger = _clamp(self.hunger - EAT_RELIEF, 0.0, 1.0)
                 return True
+            # On the way to a bowl that still has food. A path, not a refusal,
+            # so the "no food" impulse stays off.
+            if self._food_availability() > 0.05:
+                return False
             self._apply_affect_impulse(stress=0.2, valence=-0.3, intensity=0.8)
             return False
         if resource == "water":
             if self.physiology_as_policy and not self._needs_drink_action():
+                return False
+            if str(self.position) != "waterer":
                 return False
             if self.resources.water > 0.02:
                 self.resources.water = max(

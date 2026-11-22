@@ -33,13 +33,16 @@ def test_unneeded_drink_and_eat_do_not_consume_shared_stocks() -> None:
     assert agent.resources.water > 0.95
     assert agent.resources.food_pellets + agent.resources.hay > 1.9
 
+    agent.position = "waterer"
     agent.thirst = 0.9
-    agent.hunger = 0.9
     agent._interpret_action("drink")
+    agent.position = "bowl_pellets"
+    agent.hunger = 0.9
     agent._interpret_action("eat")
     assert agent.thirst < 0.5
     assert agent.hunger < 0.6
     assert agent.resources.water < 1.0
+    assert agent.resources.food_pellets < 1.0
 
 
 def test_failed_drink_is_not_rewarded_like_a_real_sip() -> None:

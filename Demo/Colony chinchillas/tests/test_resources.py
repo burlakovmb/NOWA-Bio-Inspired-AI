@@ -4,7 +4,35 @@ from colony_agent import ChinchillaAgent
 from simulation_runner import SimulationRunner
 
 
-def test_tc01_two_agents_basic_survival_loop() -> None:
+def _track_bowl_intake(monkeypatch) -> tuple[list[float], list[float]]:
+    """Amounts actually removed inside eat/drink acquisition."""
+    eaten: list[float] = []
+    drunk: list[float] = []
+    original = ChinchillaAgent._try_acquire_resource
+
+    def _tracked(self: ChinchillaAgent, resource: str) -> bool:
+        resources = self.resources
+        if resources is None:
+            return original(self, resource)
+        food_before = float(resources.food_pellets) + float(resources.hay)
+        water_before = float(resources.water)
+        acquired = original(self, resource)
+        if resource == "food_pellets":
+            taken = food_before - (float(resources.food_pellets) + float(resources.hay))
+            if taken > 0.0:
+                eaten.append(taken)
+        elif resource == "water":
+            taken = water_before - float(resources.water)
+            if taken > 0.0:
+                drunk.append(taken)
+        return acquired
+
+    monkeypatch.setattr(ChinchillaAgent, "_try_acquire_resource", _tracked)
+    return eaten, drunk
+
+
+def test_tc01_two_agents_basic_survival_loop(monkeypatch) -> None:
+    eaten, drunk = _track_bowl_intake(monkeypatch)
     runner = SimulationRunner()
     agent_0 = ChinchillaAgent(sex="F", rng_seed=1)
     agent_1 = ChinchillaAgent(sex="M", rng_seed=2)
@@ -22,7 +50,14 @@ def test_tc01_two_agents_basic_survival_loop() -> None:
             assert runner.death_registry.is_deceased(agent.agent_id)
 
     assert len(agent_0.hippocampus.experiences) > 0
-    assert (runner.resources.food_pellets < 1.0) or (runner.resources.hay < 1.0)
+    # The bowl moves only when someone ate or drank. A waking animal does
+    # not lower it by metabolizing.
+    food_drop = (1.0 - float(runner.resources.food_pellets)) + (1.0 - float(runner.resources.hay))
+    water_drop = 1.0 - float(runner.resources.water)
+    assert abs(food_drop - sum(eaten)) <= 1e-9
+    assert abs(water_drop - sum(drunk)) <= 1e-9
+    assert (food_drop > 1e-12) is (len(eaten) > 0)
+    assert (water_drop > 1e-12) is (len(drunk) > 0)
 
 
 def test_tc01_two_agents_survive_300s() -> None:

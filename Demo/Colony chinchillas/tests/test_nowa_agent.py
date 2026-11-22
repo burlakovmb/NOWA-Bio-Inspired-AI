@@ -342,8 +342,10 @@ def test_tc26_eat_and_drink_reduce_internal_needs() -> None:
     agent.resources = resources
     agent.hunger = 0.9
     agent.thirst = 0.9
+    agent.position = "bowl_pellets"
 
     ate = agent._try_acquire_resource("food_pellets")
+    agent.position = "waterer"
     drank = agent._try_acquire_resource("water")
 
     assert ate is True
@@ -357,6 +359,7 @@ def test_tc26b_eat_uses_hay_when_pellets_are_empty() -> None:
     agent = ChinchillaAgent(sex="M")
     agent.resources = resources
     agent.hunger = 0.9
+    agent.position = "bowl_hay"
 
     ate = agent._try_acquire_resource("food_pellets")
 
@@ -372,6 +375,7 @@ def test_tc26c_eat_respects_agent_food_preference_when_both_available() -> None:
     agent.resources = resources
     agent._food_source_preference = "hay"
     agent.hunger = 0.9
+    agent.position = "bowl_hay"
 
     ate = agent._try_acquire_resource("food_pellets")
 
@@ -405,8 +409,10 @@ def test_tc26e_sleeping_agent_cannot_directly_eat_or_drink() -> None:
     agent.thirst = 0.9
     agent.is_sleeping = True
     agent.current_action = "sleep"
+    agent.position = "bowl_pellets"
 
     assert agent._try_acquire_resource("food_pellets") is False
+    agent.position = "waterer"
     assert agent._try_acquire_resource("water") is False
     assert resources.food_pellets == 1.0
     assert resources.hay == 1.0

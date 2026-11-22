@@ -107,6 +107,7 @@ def test_c_eat_and_drink_relieve_before_the_penalty() -> None:
     hungry = ChinchillaAgent(sex="F", rng_seed=3, physiology_as_policy=True)
     hungry.resources = resources
     hungry.colony = [hungry]
+    hungry.position = "bowl_pellets"
     hungry.hunger = (HUNGER_AVAILABILITY_THRESHOLD + HUNGER_NEED_THRESHOLD) / 2.0
     hungry.thirst = 0.1
     hungry.energy = 0.9
@@ -127,7 +128,9 @@ def test_c_eat_and_drink_relieve_before_the_penalty() -> None:
     blocked.thirst = THIRST_AVAILABILITY_THRESHOLD - 0.02
     hunger_before = blocked.hunger
     thirst_before = blocked.thirst
+    blocked.position = "bowl_pellets"
     assert blocked._try_acquire_resource("food_pellets") is False
+    blocked.position = "waterer"
     assert blocked._try_acquire_resource("water") is False
     assert blocked.hunger == hunger_before
     assert blocked.thirst == thirst_before
@@ -135,6 +138,7 @@ def test_c_eat_and_drink_relieve_before_the_penalty() -> None:
     thirsty = ChinchillaAgent(sex="F", rng_seed=5, physiology_as_policy=True)
     thirsty.resources = SharedResources(food_pellets=1.0, hay=1.0, water=1.0)
     thirsty.colony = [thirsty]
+    thirsty.position = "waterer"
     thirsty.thirst = (THIRST_AVAILABILITY_THRESHOLD + THIRST_NEED_THRESHOLD) / 2.0
     thirsty.hunger = 0.1
     assert thirsty._try_acquire_resource("water") is True
