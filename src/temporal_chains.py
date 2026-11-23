@@ -18,6 +18,9 @@ class TemporalChain:
         self.usage_count = 1
         self.created_at = time.time()
         self.last_updated = time.time()
+        # Night (ChainMemory.sleep_index) in which the chain was last formed again. Recency for forgetting is
+        # counted in sleeps, not wall-clock seconds, so it does not depend on how fast the host runs time.
+        self.last_seen_sleep = 0
 
     def update(self, net_affect: float):
         # Simple running average with count
@@ -40,10 +43,24 @@ class TemporalChain:
 
 
 class ChainMemory:
-    """Manager for TemporalChain objects."""
+    """Manager for TemporalChain objects.
 
-    def __init__(self):
+    Finite capacity with forgetting (issue #86). At the end of each night (``close_night``) chains that stayed weak
+    (fewer than ``min_support`` formations) and were not formed again for ``stale_sleeps`` nights are pruned, the way
+    sleep downscales synapses that were not reinforced. ``capacity`` is a hard ceiling on top of that: if a night
+    still leaves more chains, those with the least retention, ``usage_count * recency_weight ** (nights since last
+    formed)``, are evicted, so a chain formed tonight is not the first to go. Without the ceiling the store, and the
+    per-decision ``match_bias`` scan over it, grow for the whole life of the agent.
+    """
+
+    def __init__(self, capacity: int = 2048, min_support: int = 6, stale_sleeps: int = 8,
+                 recency_weight: float = 0.5):
         self.chains = {}  # signature -> TemporalChain
+        self.capacity = int(capacity)
+        self.min_support = int(min_support)
+        self.stale_sleeps = int(stale_sleeps)
+        self.recency_weight = float(recency_weight)
+        self.sleep_index = 0  # nights closed so far
 
     def add_or_update(self, signature: Tuple[str, ...], net_affect: float):
         if not signature:
@@ -51,12 +68,43 @@ class ChainMemory:
         key = tuple(signature)
         if key in self.chains:
             self.chains[key].update(net_affect)
+            self.chains[key].last_seen_sleep = self.sleep_index
             return self.chains[key]
         chain = TemporalChain(key, net_affect)
         # initialize stability proportional to abs(net_affect)
         chain.stability = min(1.0, abs(net_affect) * 0.2)
+        chain.last_seen_sleep = self.sleep_index
         self.chains[key] = chain
         return chain
+
+    def close_night(self) -> Dict[str, int]:
+        """End of a night: prune weak stale chains, enforce the capacity, advance the night counter."""
+        night = self.sleep_index
+        stale = [
+            key for key, chain in self.chains.items()
+            if chain.usage_count < self.min_support and night - chain.last_seen_sleep >= self.stale_sleeps
+        ]
+        for key in stale:
+            del self.chains[key]
+        evicted = 0
+        excess = len(self.chains) - max(0, self.capacity)
+        if excess > 0:
+            # least retention first (support discounted by nights since last formed), then least stable;
+            # the signature makes ties stable
+            weight = min(1.0, max(0.0, self.recency_weight))
+            order = sorted(
+                self.chains.items(),
+                key=lambda item: (
+                    item[1].usage_count * weight ** max(0, night - item[1].last_seen_sleep),
+                    item[1].stability,
+                    item[0],
+                ),
+            )
+            for key, _chain in order[:excess]:
+                del self.chains[key]
+            evicted = excess
+        self.sleep_index = night + 1
+        return {"chains_pruned": len(stale), "chains_evicted": evicted, "chains_kept": len(self.chains)}
 
     def match_bias(self, recent_sequence: List[str]) -> Dict[str, float]:
         """Return a mapping action -> bias based on matching chains.
@@ -112,9 +160,10 @@ class ChainMemory:
                 "stability": chain.stability,
                 "usage_count": chain.usage_count,
                 "created_at": chain.created_at,
-                "last_updated": chain.last_updated
+                "last_updated": chain.last_updated,
+                "last_seen_sleep": chain.last_seen_sleep,
             }
-        return {"chains": chains_data}
+        return {"chains": chains_data, "sleep_index": self.sleep_index}
 
     def from_dict(self, data: dict):
         """Restore chains from dict (loaded from save)"""
@@ -122,6 +171,7 @@ class ChainMemory:
             return
         
         import time
+        self.sleep_index = int(data.get("sleep_index", self.sleep_index))
         for signature_tuple, chain_data in data["chains"].items():
             # signature_tuple is already the key from dict
             signature = tuple(signature_tuple) if isinstance(signature_tuple, (list, tuple)) else tuple([signature_tuple])
@@ -131,5 +181,8 @@ class ChainMemory:
             chain.usage_count = chain_data.get("usage_count", 1)
             chain.created_at = chain_data.get("created_at", time.time())
             chain.last_updated = chain_data.get("last_updated", time.time())
-            
+            # Saves made before issue #86 carry no night stamp: count those chains as seen now, so loading an old
+            # save does not prune them all at the next night.
+            chain.last_seen_sleep = int(chain_data.get("last_seen_sleep", self.sleep_index))
+
             self.chains[signature] = chain
