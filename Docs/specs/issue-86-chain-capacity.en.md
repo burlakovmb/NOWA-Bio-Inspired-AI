@@ -34,17 +34,17 @@ Recency is counted in **nights**, not wall-clock seconds, so forgetting does not
 ### 2.3 Temporal chains: `ChainMemory.close_night()`
 
 1. **Prune.** A chain is removed when it stayed weak (`usage_count < min_support`) and was not formed again for `stale_sleeps` nights. A chain formed again keeps its place; a well-supported chain is not pruned for staleness alone.
-2. **Capacity.** If more than `capacity` chains remain, the weakest are evicted: least `usage_count`, then least recent `last_seen_sleep`, then least `stability`; the signature breaks ties, so the result is deterministic.
+2. **Capacity.** If more than `capacity` chains remain, those with the least retention are evicted: `usage_count * recency_weight ** (nights since last formed)`, then least `stability`; the signature breaks ties, so the result is deterministic. With `recency_weight = 0.5` a chain formed tonight keeps its full support, so it is not evicted before an old, stronger chain that has not been formed for a few nights; `1.0` ranks by support alone.
 3. `sleep_index` advances by one.
 
-Defaults: `capacity = 2048`, `min_support = 6`, `stale_sleeps = 8`. A sequence present in the recent episodes is formed once per cycle (three per night by default), so `min_support = 6` means "reinforced on about two nights or fewer". The capacity bounds the `match_bias` scan.
+Defaults: `capacity = 2048`, `min_support = 6`, `stale_sleeps = 8`, `recency_weight = 0.5`. A sequence present in the recent episodes is formed once per cycle (three per night by default), so `min_support = 6` means "reinforced on about two nights or fewer". The capacity bounds the `match_bias` scan.
 
 ### 2.4 Visit counts
 
 Two attributes on `SleepManager`:
 
 - `visit_halving_sleeps = 8`: every 8th night the counts of contexts **not visited for the last 8 nights** are halved (integer division); a count that reaches 0 is removed. A context the agent stopped visiting slowly becomes novel again for the visit-count exploration bonus in `basal_ganglia`, and one-off contexts disappear. A context in use keeps its counts.
-- `visit_capacity = 4096`: if more rows remain, the smallest counts are dropped first; the key breaks ties.
+- `visit_capacity = 4096`: if more rows remain, the rows with the least retention go first: `count * visit_recency_weight ** (nights since the context was last visited)`, `visit_recency_weight = 0.5`; the key breaks ties. A place visited just before sleep keeps its full count and is not the first to go.
 
 0 turns either one off.
 
@@ -66,10 +66,10 @@ Why only stale contexts: the first version halved every count. On the long learn
 
 ## 3. Test
 
-`tests/test_issue_86_chain_capacity.py`, 9 tests:
+`tests/test_issue_86_chain_capacity.py`, 12 tests:
 
 - a weak chain survives two stale nights and is pruned on the third; a chain formed again every night survives; a well-supported chain survives staleness;
-- the capacity evicts the weakest and least recent;
+- the capacity evicts the weakest; a chain formed tonight outlasts an old, stronger one; a context visited tonight outlasts an old, frequent one; `visit_recency_weight = 1.0` ranks by count alone;
 - `to_dict` / `from_dict` keep the night stamps; a pre-#86 save is not pruned at the next night;
 - counts of a stale context halve on schedule and drop at 0; counts of a context in use do not fade; the cap drops the smallest counts;
 - an agent living through 600 diverse decisions and 6 nights under `NOWA_STRICT_LEARNING=1` stays within a chain capacity of 60, and an `agent=` save/load keeps its night counter.

@@ -151,3 +151,28 @@ def test_a_diverse_life_stays_within_the_chain_capacity(tmp_path):
     restored = _agent()
     storage.load_agent(restored.hippocampus, restored.cortex, restored.selector, str(path), agent=restored)
     assert restored.sleep_manager.chain_memory.sleep_index == nights
+
+
+def test_capacity_keeps_a_chain_formed_tonight_over_an_old_stronger_one():
+    memory = ChainMemory(capacity=1, min_support=1, stale_sleeps=100)
+    for _ in range(4):
+        memory.add_or_update(("old", "action:a0"), 0.1)  # support 4, formed on night 0
+    _close(memory, 3)
+    memory.add_or_update(("new", "action:a1"), 0.1)      # support 1, formed tonight (night 3)
+    memory.close_night()
+    assert list(memory.chains) == [("new", "action:a1")]  # 4 * 0.5**3 = 0.5 < 1 * 0.5**0 = 1
+
+
+def test_visit_cap_keeps_a_context_visited_tonight_over_an_old_frequent_one():
+    counts = {("old", "a0"): 6, ("new", "a0"): 1}
+    manager = _manager_with_counts(counts, night=4, halving=0, capacity=1, last_visit={"old": 0, "new": 4})
+    manager._close_night()
+    assert counts == {("new", "a0"): 1}                    # 6 * 0.5**4 = 0.375 < 1 * 0.5**0 = 1
+
+
+def test_recency_weight_one_falls_back_to_count_only():
+    counts = {("old", "a0"): 6, ("new", "a0"): 1}
+    manager = _manager_with_counts(counts, night=4, halving=0, capacity=1, last_visit={"old": 0, "new": 4})
+    manager.visit_recency_weight = 1.0
+    manager._close_night()
+    assert counts == {("old", "a0"): 6}

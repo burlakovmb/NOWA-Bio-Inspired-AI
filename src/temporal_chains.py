@@ -48,15 +48,18 @@ class ChainMemory:
     Finite capacity with forgetting (issue #86). At the end of each night (``close_night``) chains that stayed weak
     (fewer than ``min_support`` formations) and were not formed again for ``stale_sleeps`` nights are pruned, the way
     sleep downscales synapses that were not reinforced. ``capacity`` is a hard ceiling on top of that: if a night
-    still leaves more chains, the weakest and least recent are evicted. Without it the store, and the per-decision
-    ``match_bias`` scan over it, grow for the whole life of the agent.
+    still leaves more chains, those with the least retention, ``usage_count * recency_weight ** (nights since last
+    formed)``, are evicted, so a chain formed tonight is not the first to go. Without the ceiling the store, and the
+    per-decision ``match_bias`` scan over it, grow for the whole life of the agent.
     """
 
-    def __init__(self, capacity: int = 2048, min_support: int = 6, stale_sleeps: int = 8):
+    def __init__(self, capacity: int = 2048, min_support: int = 6, stale_sleeps: int = 8,
+                 recency_weight: float = 0.5):
         self.chains = {}  # signature -> TemporalChain
         self.capacity = int(capacity)
         self.min_support = int(min_support)
         self.stale_sleeps = int(stale_sleeps)
+        self.recency_weight = float(recency_weight)
         self.sleep_index = 0  # nights closed so far
 
     def add_or_update(self, signature: Tuple[str, ...], net_affect: float):
@@ -86,10 +89,16 @@ class ChainMemory:
         evicted = 0
         excess = len(self.chains) - max(0, self.capacity)
         if excess > 0:
-            # weakest first: least support, then least recent, then least stable; the signature makes ties stable
+            # least retention first (support discounted by nights since last formed), then least stable;
+            # the signature makes ties stable
+            weight = min(1.0, max(0.0, self.recency_weight))
             order = sorted(
                 self.chains.items(),
-                key=lambda item: (item[1].usage_count, item[1].last_seen_sleep, item[1].stability, item[0]),
+                key=lambda item: (
+                    item[1].usage_count * weight ** max(0, night - item[1].last_seen_sleep),
+                    item[1].stability,
+                    item[0],
+                ),
             )
             for key, _chain in order[:excess]:
                 del self.chains[key]

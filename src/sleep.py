@@ -180,9 +180,11 @@ class SleepManager:
         self.chain_memory = ChainMemory()
         # Stable action-visit counts (the agent's _action_visit_counts), issue #86: every visit_halving_sleeps nights
         # the counts of contexts not visited for that long are halved, and the table is capped at visit_capacity
-        # rows. A context the agent stopped visiting slowly becomes novel again; one in use keeps its counts.
+        # rows. A context the agent stopped visiting slowly becomes novel again; one in use keeps its counts. Over
+        # the cap the row with the least count * visit_recency_weight ** (nights since its last visit) goes first.
         self.visit_halving_sleeps: int = 8
         self.visit_capacity: int = 4096
+        self.visit_recency_weight: float = 0.5
         # context -> night it was last visited (bookkeeping, not saved)
         self._visit_context_night: Dict[str, int] = {}
         self.clustering_similarity_threshold = clustering_similarity_threshold
@@ -3096,7 +3098,18 @@ class SleepManager:
         capacity = int(getattr(self, "visit_capacity", 0) or 0)
         excess = len(counts) - capacity
         if capacity > 0 and excess > 0:
-            for key, _count in sorted(counts.items(), key=lambda item: (int(item[1]), item[0]))[:excess]:
+            # Retention = count * recency_weight ** (nights since the context was last visited): a context visited
+            # tonight keeps its full count, so a new place seen just before sleep is not the first to go; old,
+            # rarely visited contexts are. The key breaks ties.
+            renewed = self.__dict__.setdefault("_visit_context_night", {})
+            weight = min(1.0, max(0.0, float(getattr(self, "visit_recency_weight", 0.5))))
+
+            def retention(item):
+                (context, _action), count = item
+                age = max(0, night - renewed.setdefault(context, night))
+                return (int(count) * weight ** age, item[0])
+
+            for key, _count in sorted(counts.items(), key=retention)[:excess]:
                 del counts[key]
         stats["visit_rows_dropped"] = before - len(counts)
         return stats
