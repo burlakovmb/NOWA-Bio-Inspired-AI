@@ -461,6 +461,8 @@ class RunController:
         self.last_nr_floors = nr_floors_from_baseline(
             baseline_bundle.get("stage_1a_baseline") or {},
             baseline_bundle.get("stage_1a_spread_iqr") or {},
+            cost_vs_chance_median=baseline_bundle.get("cost_vs_chance_median"),
+            cost_vs_chance_iqr=baseline_bundle.get("cost_vs_chance_iqr"),
         )
         trainer = SandboxTrainer(
             agent,
@@ -469,6 +471,10 @@ class RunController:
             sleep_every_n_days=config.training.sleep_every_n_days,
             stage_1a_baseline=baseline_bundle.get("stage_1a_baseline") or {},
             stage_1a_spread_iqr=baseline_bundle.get("stage_1a_spread_iqr") or {},
+            supplier_set_count=config.training.supplier_set_count,
+            quarters_per_supplier_set=config.training.quarters_per_supplier_set,
+            cost_vs_chance_median=baseline_bundle.get("cost_vs_chance_median"),
+            cost_vs_chance_iqr=baseline_bundle.get("cost_vs_chance_iqr"),
         )
         trainer.quarter_overrides = {
             int(k): dict(v) for k, v in dict(spec.quarter_overrides or {}).items()

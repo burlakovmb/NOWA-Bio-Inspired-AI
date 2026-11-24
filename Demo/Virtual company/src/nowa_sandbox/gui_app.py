@@ -708,6 +708,8 @@ class SandboxLabApp(tk.Tk if tk is not None else object):
             self._nr_floors = nr_floors_from_baseline(
                 bundle.get("stage_1a_baseline") or {},
                 bundle.get("stage_1a_spread_iqr") or {},
+                cost_vs_chance_median=bundle.get("cost_vs_chance_median"),
+                cost_vs_chance_iqr=bundle.get("cost_vs_chance_iqr"),
             )
         except Exception:
             self._nr_floors = dict(self.controller.last_nr_floors or {})

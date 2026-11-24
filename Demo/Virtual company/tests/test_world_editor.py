@@ -17,7 +17,7 @@ def test_build_world_for_quarter_is_deterministic():
     assert snapshot_world(a)["products"][0]["base_demand_per_day"] == (
         snapshot_world(b)["products"][0]["base_demand_per_day"]
     )
-    assert a.config.seed == 44  # 42 + 3 - 1
+    assert a.config.seed == 42003  # 42 * 1000 + 3
 
 
 def test_apply_overrides_changes_price_and_budget():

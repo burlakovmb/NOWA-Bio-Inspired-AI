@@ -184,7 +184,7 @@ class _ScriptedFitnessEvaluator(ProcurementFitnessEvaluator):
         # independently of the numeric thresholds when needed.
         return report
 
-    def check_non_regression(self, vector, stage_1a_baseline, stage_1a_spread_iqr=None):
+    def check_non_regression(self, vector, stage_1a_baseline, stage_1a_spread_iqr=None, **_extra):
         # The trainer already advanced _index in evaluate; look one back.
         _, guard = self._script[self._index - 1]
         return dict(guard) if guard is not None else None
@@ -348,3 +348,44 @@ class TestResumePreservesStreak:
         summary = SandboxTrainingResult(quarters=quarters).summary()
         assert "qualifying_streak=1" in summary
         assert "qualifying_streak=0" in summary
+
+
+class TestNormalizedCostGuard:
+    """cost_efficiency is guarded on cost_vs_chance when the baseline has it."""
+
+    def _vector(self, cost_efficiency):
+        values = {c: 1.0 for c in PROCUREMENT_CRITERIA}
+        values["cost_efficiency"] = cost_efficiency
+        return ProcurementFitnessVector(**values, n_days=10, n_orders=5)
+
+    def test_normalized_floor_can_sit_below_zero(self):
+        evaluator = ProcurementFitnessEvaluator(stage="1b")
+        baseline = {
+            "cost_efficiency": 0.9,
+            "stockout_avoidance": 0.9,
+            "budget_discipline": 1.0,
+            "reaction_to_risk_events": 0.8,
+        }
+        spread = {name: 0.0 for name in baseline}
+        # median 0, IQR 0.05 -> unclipped floor = min(0, -0.05) = -0.05.
+        # Raw cost 0.9 would clear a 0.9 baseline; the normalized value does not.
+        failed = evaluator.check_non_regression(
+            self._vector(0.9),
+            baseline,
+            stage_1a_spread_iqr=spread,
+            cost_vs_chance=-0.2,
+            cost_vs_chance_median=0.0,
+            cost_vs_chance_iqr=0.05,
+        )
+        assert failed["cost_efficiency"] is False
+        assert failed["stockout_avoidance"] is True
+
+        passed = evaluator.check_non_regression(
+            self._vector(0.2),
+            baseline,
+            stage_1a_spread_iqr=spread,
+            cost_vs_chance=-0.04,
+            cost_vs_chance_median=0.0,
+            cost_vs_chance_iqr=0.05,
+        )
+        assert passed["cost_efficiency"] is True

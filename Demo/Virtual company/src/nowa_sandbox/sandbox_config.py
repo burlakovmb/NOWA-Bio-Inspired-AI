@@ -33,6 +33,10 @@ class TrainingConfig:
     seed_intuition: bool = True
     stage: str = "1a"
     """Curriculum stage (v1.1 section 26): "1a" rotating suppliers, "1b" persistent."""
+    # Stage 1b only. K supplier sets, each held for quarters_per_supplier_set
+    # quarters counted from the first Stage 1b quarter.
+    supplier_set_count: int = 4
+    quarters_per_supplier_set: int = 5
 
 
 @dataclass
@@ -122,6 +126,7 @@ class SandboxConfig:
         )
 
         training = dict(data.get("training") or {})
+        defaults_training = TrainingConfig()
         config.training = TrainingConfig(
             n_quarters=safe_int(training.get("n_quarters", 30), 30, minimum=0),
             sleep_every_n_days=safe_int(training.get("sleep_every_n_days", 7), 7, minimum=1),
@@ -129,6 +134,19 @@ class SandboxConfig:
             seed=safe_int(training.get("seed", 42), 42),
             seed_intuition=bool(training.get("seed_intuition", True)),
             stage=_valid_stage(training.get("stage", "1a")),
+            supplier_set_count=safe_int(
+                training.get("supplier_set_count", defaults_training.supplier_set_count),
+                defaults_training.supplier_set_count,
+                minimum=1,
+            ),
+            quarters_per_supplier_set=safe_int(
+                training.get(
+                    "quarters_per_supplier_set",
+                    defaults_training.quarters_per_supplier_set,
+                ),
+                defaults_training.quarters_per_supplier_set,
+                minimum=1,
+            ),
         )
 
         thresholds = dict(GRADUATION_THRESHOLDS)
@@ -197,6 +215,8 @@ class SandboxConfig:
                 "seed": self.training.seed,
                 "seed_intuition": self.training.seed_intuition,
                 "stage": self.training.stage,
+                "supplier_set_count": self.training.supplier_set_count,
+                "quarters_per_supplier_set": self.training.quarters_per_supplier_set,
             },
             "graduation_thresholds": dict(self.graduation_thresholds),
             "output": {

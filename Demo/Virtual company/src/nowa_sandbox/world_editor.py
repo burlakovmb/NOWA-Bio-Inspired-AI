@@ -12,6 +12,7 @@ from nowa_sandbox.procurement_world import (
     VirtualProduct,
     VirtualSupplier,
     offer_key,
+    quarter_world_seed,
 )
 from nowa_sandbox.world_curriculum import empty_quarter
 
@@ -68,10 +69,12 @@ def build_world_for_quarter(
     *,
     overrides: Optional[Mapping[str, Any]] = None,
 ) -> ProcurementWorld:
-    """Deterministic world for quarter Q (seed + Q - 1), then apply overrides.
+    """Deterministic world for quarter Q, then apply overrides.
 
-    If ``overrides`` includes a full products/suppliers/offers curriculum
-    payload, build from that spec instead of RNG.
+    RNG seed is ``quarter_world_seed`` (``base * 1000 + quarter``, or the
+    quarter index when the base seed is unset). An overrides payload that
+    already carries products, suppliers and offers is built from that spec;
+    the seed only drives shocks.
     """
     if overrides and (
         overrides.get("offers") is not None
@@ -81,11 +84,7 @@ def build_world_for_quarter(
             and "offers" in overrides
         )
     ):
-        base_seed = base_config.seed
-        if base_seed is None:
-            seed = int(quarter_index)
-        else:
-            seed = int(base_seed) + int(quarter_index) - 1
+        seed = quarter_world_seed(base_config.seed, quarter_index)
         return ProcurementWorld.from_quarter_spec(
             overrides,
             days_per_quarter=base_config.days_per_quarter,
@@ -95,11 +94,7 @@ def build_world_for_quarter(
             supplier_default_probability=base_config.supplier_default_probability,
         )
 
-    base_seed = base_config.seed
-    if base_seed is None:
-        seed = int(quarter_index)
-    else:
-        seed = int(base_seed) + int(quarter_index) - 1
+    seed = quarter_world_seed(base_config.seed, quarter_index)
     cfg = replace(base_config, seed=seed)
     world = ProcurementWorld(cfg)
     if overrides:

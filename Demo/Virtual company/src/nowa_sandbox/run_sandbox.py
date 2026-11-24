@@ -55,6 +55,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--suppliers", type=int, default=None)
     parser.add_argument("--sleep-every", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--supplier-sets",
+        type=int,
+        default=None,
+        help="Stage 1b: how many supplier sets to plan (default 4). "
+             "Each set is drawn from that quarter's world seed.",
+    )
+    parser.add_argument(
+        "--quarters-per-supplier-set",
+        type=int,
+        default=None,
+        help="Stage 1b: quarters a supplier set stays before the next draw "
+             "(default 5), counted from the first Stage 1b quarter.",
+    )
     parser.add_argument("--output", default="results/sandbox_run.json")
     parser.add_argument(
         "--checkpoint",
@@ -176,6 +190,12 @@ def resolve_config(args: argparse.Namespace) -> SandboxConfig:
         config.training.seed_intuition = False
     if args.stage is not None:
         config.training.stage = args.stage
+    if getattr(args, "supplier_sets", None) is not None:
+        config.training.supplier_set_count = max(1, int(args.supplier_sets))
+    if getattr(args, "quarters_per_supplier_set", None) is not None:
+        config.training.quarters_per_supplier_set = max(
+            1, int(args.quarters_per_supplier_set)
+        )
     return config
 
 
@@ -249,6 +269,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         stage_1a_spread_iqr=baseline_bundle.get("stage_1a_spread_iqr") or {},
         verbose_pipeline=args.verbose_pipeline,
         pipeline_logger=log,
+        supplier_set_count=config.training.supplier_set_count,
+        quarters_per_supplier_set=config.training.quarters_per_supplier_set,
+        cost_vs_chance_median=baseline_bundle.get("cost_vs_chance_median"),
+        cost_vs_chance_iqr=baseline_bundle.get("cost_vs_chance_iqr"),
     )
     if checkpoint is not None:
         trainer.carried_suppliers = (checkpoint.metadata or {}).get(

@@ -80,12 +80,27 @@ def is_single_supplier_monopoly(diversification: float) -> bool:
 def nr_floors_from_baseline(
     baseline: Optional[Mapping[str, float]] = None,
     spread_iqr: Optional[Mapping[str, float]] = None,
+    cost_vs_chance_median: Optional[float] = None,
+    cost_vs_chance_iqr: Optional[float] = None,
 ) -> Dict[str, float]:
-    """Effective Stage 1a non-regression floors (empty if no baseline)."""
+    """Effective Stage 1a non-regression floors (empty if no baseline).
+
+    When a normalized-savings median is present, the ``cost_efficiency``
+    floor is that series' unclipped floor. The displayed key stays
+    ``cost_efficiency`` so the six-criterion guard keeps its names.
+    """
     baseline = dict(baseline or {})
     spread = dict(spread_iqr or {})
     floors: Dict[str, float] = {}
     for criterion in STAGE_1A_CRITERIA:
+        if criterion == "cost_efficiency" and cost_vs_chance_median is not None:
+            floors[criterion] = non_regression_floor(
+                float(cost_vs_chance_median),
+                float(0.0 if cost_vs_chance_iqr is None else cost_vs_chance_iqr),
+                base_multiplier=NON_REGRESSION_FLOOR,
+                clip_at_zero=False,
+            )
+            continue
         if criterion not in baseline:
             continue
         median = float(baseline[criterion])

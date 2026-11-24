@@ -308,6 +308,7 @@ def _result_to_plain(result: SandboxTrainingResult) -> Dict[str, Any]:
         "quarters": quarters,
         "graduated": bool(result.graduated),
         "graduated_at_quarter": result.graduated_at_quarter,
+        "stage_1b_start_quarter": result.stage_1b_start_quarter,
     }
 
 
@@ -326,10 +327,14 @@ def _result_from_plain(data: Any) -> SandboxTrainingResult:
             non_regression=item.get("non_regression"),
         ))
     raw_graduated_at = row.get("graduated_at_quarter")
+    raw_stage_start = row.get("stage_1b_start_quarter")
     return SandboxTrainingResult(
         quarters=quarters,
         graduated=bool(row.get("graduated")),
         graduated_at_quarter=None if raw_graduated_at is None else int(raw_graduated_at),
+        stage_1b_start_quarter=(
+            None if raw_stage_start is None else int(raw_stage_start)
+        ),
     )
 
 

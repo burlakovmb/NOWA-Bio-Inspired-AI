@@ -29,6 +29,26 @@ HIGH_VOLATILITY_IQR = 0.3
 BASELINE_METHODS = ("median_all", "mean_best")
 
 
+def _world_summary_of(quarter: Any) -> Mapping[str, Any]:
+    """Read ``world_summary`` from a JSON record or a QuarterResult."""
+    if isinstance(quarter, Mapping):
+        summary = quarter.get("world_summary")
+        return summary if isinstance(summary, Mapping) else {}
+    summary = getattr(quarter, "world_summary", None)
+    return summary if isinstance(summary, Mapping) else {}
+
+
+def _cost_vs_chance_values(quarters: Sequence[Any]) -> List[float]:
+    """Normalized savings present on a quarter. Missing keys are skipped."""
+    values: List[float] = []
+    for quarter in quarters:
+        summary = _world_summary_of(quarter)
+        if "cost_vs_chance" not in summary:
+            continue
+        values.append(safe_float(summary.get("cost_vs_chance"), 0.0))
+    return values
+
+
 def _fitness_of(quarter: Any) -> Mapping[str, Any]:
     """Read the fitness mapping from a JSON record or a QuarterResult."""
     if isinstance(quarter, Mapping):
@@ -82,19 +102,28 @@ def non_regression_floor(
     median_value: float,
     iqr: float,
     base_multiplier: float = 0.9,
+    clip_at_zero: bool = True,
 ) -> float:
     """Volatility-aware floor for a single Stage 1a criterion (spec v1.2).
 
     Stable criteria (IQR near 0) keep the classic ``median * 0.9`` bar.
     Volatile ones relax toward ``median - iqr``, so swings that already
     happened throughout Stage 1a are not treated as Stage 1b regression.
+
+    ``clip_at_zero`` is off only for normalized savings (``cost_vs_chance``).
+    That series sits near 0 and can be negative, so ``max(0, ...)`` would
+    collapse the floor to 0 and flag ordinary Stage 1a noise as regression.
+    The raw criteria stay clipped.
     """
     median_value = safe_float(median_value, 0.0)
     iqr = max(0.0, safe_float(iqr, 0.0))
     base_multiplier = safe_float(base_multiplier, 0.9)
     strict_floor = median_value * base_multiplier
     volatility_floor = median_value - iqr
-    return max(0.0, min(strict_floor, volatility_floor))
+    floor = min(strict_floor, volatility_floor)
+    if clip_at_zero:
+        return max(0.0, floor)
+    return floor
 
 
 def compute_stage_1a_baseline(
@@ -143,7 +172,7 @@ def _compute_median_all(quarters: List[Any]) -> Dict[str, Any]:
         spread[criterion] = round(_iqr(values), 4)
 
     passed_count = len(successful_quarters(quarters))
-    return {
+    payload: Dict[str, Any] = {
         "stage_1a_baseline": baseline,
         "stage_1a_spread_iqr": spread,
         "method": "median_all",
@@ -154,6 +183,11 @@ def _compute_median_all(quarters: List[Any]) -> Dict[str, Any]:
             _quarter_index(q, i) for i, q in enumerate(quarters, start=1)
         ],
     }
+    normalized = _cost_vs_chance_values(quarters)
+    if len(normalized) >= MIN_QUARTERS_FOR_BASELINE:
+        payload["cost_vs_chance_median"] = round(statistics.median(normalized), 4)
+        payload["cost_vs_chance_iqr"] = round(_iqr(normalized), 4)
+    return payload
 
 
 def _compute_mean_best(quarters: List[Any], last_n: int) -> Dict[str, Any]:
@@ -245,7 +279,7 @@ def load_baseline_bundle(path: str) -> Dict[str, Any]:
                 for criterion in STAGE_1A_CRITERIA
                 if criterion in baseline
             }
-            return {
+            bundle = {
                 "stage_1a_baseline": baseline,
                 "stage_1a_spread_iqr": spread,
                 "method": str(data.get("method") or "median_all"),
@@ -259,6 +293,14 @@ def load_baseline_bundle(path: str) -> Dict[str, Any]:
                 ),
                 "source": path,
             }
+            if "cost_vs_chance_median" in data:
+                bundle["cost_vs_chance_median"] = safe_float(
+                    data.get("cost_vs_chance_median"), 0.0
+                )
+                bundle["cost_vs_chance_iqr"] = safe_float(
+                    data.get("cost_vs_chance_iqr"), 0.0
+                )
+            return bundle
 
     raise ValueError(
         f"{path} contains no Stage 1a baseline: expected a run result list, "
