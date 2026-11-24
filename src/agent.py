@@ -5099,6 +5099,8 @@ class Agent:
 
             failures = state.get("failures", [])
             runtime.failure_log = list(failures or []) if isinstance(failures, list) else []
+            if hasattr(runtime, "_trim_failure_log"):
+                runtime._trim_failure_log()  # a save from before issue #28 may hold more than the retained tail
 
             speech = state.get("speech", {}) or {}
             if isinstance(speech, dict):
