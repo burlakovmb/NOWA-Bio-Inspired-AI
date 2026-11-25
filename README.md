@@ -1,3 +1,5 @@
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="Docs/media/logo-dark.png"><img src="Docs/media/logo.png" width="180" alt="NOWA logo"></picture></p>
+
 # NOWA-Cognitive
 
 **An AI agent that sleeps, feels, and inherits a genome — and learns without backprop.**
