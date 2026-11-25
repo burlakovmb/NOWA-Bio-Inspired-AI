@@ -358,34 +358,60 @@ class TestNormalizedCostGuard:
         values["cost_efficiency"] = cost_efficiency
         return ProcurementFitnessVector(**values, n_days=10, n_orders=5)
 
-    def test_normalized_floor_can_sit_below_zero(self):
-        evaluator = ProcurementFitnessEvaluator(stage="1b")
-        baseline = {
+    def _baseline(self):
+        return {
             "cost_efficiency": 0.9,
             "stockout_avoidance": 0.9,
             "budget_discipline": 1.0,
             "reaction_to_risk_events": 0.8,
         }
-        spread = {name: 0.0 for name in baseline}
-        # median 0, IQR 0.05 -> unclipped floor = min(0, -0.05) = -0.05.
-        # Raw cost 0.9 would clear a 0.9 baseline; the normalized value does not.
-        failed = evaluator.check_non_regression(
-            self._vector(0.9),
-            baseline,
-            stage_1a_spread_iqr=spread,
-            cost_vs_chance=-0.2,
-            cost_vs_chance_median=0.0,
-            cost_vs_chance_iqr=0.05,
-        )
-        assert failed["cost_efficiency"] is False
-        assert failed["stockout_avoidance"] is True
 
-        passed = evaluator.check_non_regression(
-            self._vector(0.2),
-            baseline,
-            stage_1a_spread_iqr=spread,
-            cost_vs_chance=-0.04,
-            cost_vs_chance_median=0.0,
-            cost_vs_chance_iqr=0.05,
+    def test_random_policy_fails_near_zero_baseline_because_of_delta(self):
+        """cost_vs_chance ≈ 0 would clear a negative statistical floor.
+
+        δ lifts that floor, so a chance-level policy does not pass.
+        """
+        evaluator = ProcurementFitnessEvaluator(stage="1b")
+        median, iqr = 0.0, 0.05
+        statistical = min(0.9 * median, median - iqr)
+        assert statistical < 0.0
+        assert 0.0 >= statistical
+        guard = evaluator.check_non_regression(
+            self._vector(0.9),
+            self._baseline(),
+            stage_1a_spread_iqr={name: 0.0 for name in self._baseline()},
+            cost_vs_chance=0.0,
+            cost_vs_chance_median=median,
+            cost_vs_chance_iqr=iqr,
         )
-        assert passed["cost_efficiency"] is True
+        assert guard["cost_efficiency"] is False
+        assert guard["stockout_avoidance"] is True
+
+    def test_floor_matches_previous_formula_when_both_terms_exceed_delta(self):
+        median, iqr = 0.40, 0.05
+        strict = 0.9 * median
+        volatility = median - iqr
+        delta = ProcurementFitnessEvaluator(stage="1b").cost_vs_chance_floor_delta
+        assert strict > delta and volatility > delta
+        previous = min(strict, volatility)
+        evaluator = ProcurementFitnessEvaluator(stage="1b")
+        spread = {name: 0.0 for name in self._baseline()}
+        below = evaluator.check_non_regression(
+            self._vector(0.9),
+            self._baseline(),
+            stage_1a_spread_iqr=spread,
+            cost_vs_chance=previous - 0.01,
+            cost_vs_chance_median=median,
+            cost_vs_chance_iqr=iqr,
+        )
+        above = evaluator.check_non_regression(
+            self._vector(0.9),
+            self._baseline(),
+            stage_1a_spread_iqr=spread,
+            cost_vs_chance=previous + 0.01,
+            cost_vs_chance_median=median,
+            cost_vs_chance_iqr=iqr,
+        )
+        assert below["cost_efficiency"] is False
+        assert above["cost_efficiency"] is True
+        assert above["budget_discipline"] is True

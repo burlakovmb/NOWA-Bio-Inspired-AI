@@ -135,9 +135,49 @@ class TestRoundTrip:
 
     def test_to_dict_contains_all_sections(self):
         data = SandboxConfig.load(None).to_dict()
-        assert set(data) == {"world", "training", "graduation_thresholds", "output"}
+        assert set(data) == {
+            "world", "training", "graduation_thresholds", "stage_baseline", "output",
+        }
 
     def test_to_dict_round_trips_through_from_mapping(self):
         original = SandboxConfig.from_yaml(DEFAULT_CONFIG_PATH)
         restored = SandboxConfig.from_mapping(original.to_dict())
         assert restored.to_dict() == original.to_dict()
+
+
+class TestCostVsChanceFloorDelta:
+
+    def test_delta_is_read_from_config(self, tmp_path):
+        shipped = SandboxConfig.from_yaml(DEFAULT_CONFIG_PATH)
+        assert shipped.stage_baseline.cost_vs_chance_floor_delta == pytest.approx(0.03)
+
+        path = tmp_path / "cfg.yaml"
+        path.write_text(
+            "stage_baseline:\n  cost_vs_chance_floor_delta: 0.04\n",
+            encoding="utf-8",
+        )
+        loaded = SandboxConfig.from_yaml(path)
+        assert loaded.stage_baseline.cost_vs_chance_floor_delta == pytest.approx(0.04)
+
+        evaluator = ProcurementFitnessEvaluator(
+            stage="1b",
+            cost_vs_chance_floor_delta=loaded.stage_baseline.cost_vs_chance_floor_delta,
+        )
+        assert evaluator.cost_vs_chance_floor_delta == pytest.approx(0.04)
+
+        low = tmp_path / "low.yaml"
+        low.write_text(
+            "stage_baseline:\n  cost_vs_chance_floor_delta: 0.01\n",
+            encoding="utf-8",
+        )
+        high = tmp_path / "high.yaml"
+        high.write_text(
+            "stage_baseline:\n  cost_vs_chance_floor_delta: 0.2\n",
+            encoding="utf-8",
+        )
+        assert SandboxConfig.from_yaml(low).stage_baseline.cost_vs_chance_floor_delta == (
+            pytest.approx(0.02)
+        )
+        assert SandboxConfig.from_yaml(high).stage_baseline.cost_vs_chance_floor_delta == (
+            pytest.approx(0.05)
+        )

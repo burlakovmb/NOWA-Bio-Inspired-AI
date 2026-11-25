@@ -446,6 +446,7 @@ class RunController:
         fitness_evaluator = ProcurementFitnessEvaluator(
             thresholds=config.graduation_thresholds,
             stage=config.training.stage,
+            cost_vs_chance_floor_delta=config.stage_baseline.cost_vs_chance_floor_delta,
         )
         self._log(
             on_log,
@@ -463,6 +464,7 @@ class RunController:
             baseline_bundle.get("stage_1a_spread_iqr") or {},
             cost_vs_chance_median=baseline_bundle.get("cost_vs_chance_median"),
             cost_vs_chance_iqr=baseline_bundle.get("cost_vs_chance_iqr"),
+            cost_vs_chance_floor_delta=config.stage_baseline.cost_vs_chance_floor_delta,
         )
         trainer = SandboxTrainer(
             agent,

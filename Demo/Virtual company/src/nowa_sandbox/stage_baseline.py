@@ -26,7 +26,26 @@ MIN_QUARTERS_FOR_BASELINE = 15
 HIGH_VOLATILITY_IQR = 0.3
 """IQR above this is flagged as high quarter-to-quarter volatility."""
 
+COST_VS_CHANCE_FLOOR_DELTA = 0.03
+"""Lower bound of the normalized cost floor (``cost_vs_chance``).
+
+A degenerate or near-zero Stage 1a baseline must not let a random policy
+pass the Stage 1b guard. Allowed range is 0.02–0.05.
+"""
+
+COST_VS_CHANCE_FLOOR_DELTA_MIN = 0.02
+COST_VS_CHANCE_FLOOR_DELTA_MAX = 0.05
+
 BASELINE_METHODS = ("median_all", "mean_best")
+
+
+def clamp_cost_vs_chance_floor_delta(value: Any) -> float:
+    """Keep δ inside the allowed 0.02–0.05 band."""
+    delta = safe_float(value, COST_VS_CHANCE_FLOOR_DELTA)
+    return min(
+        COST_VS_CHANCE_FLOOR_DELTA_MAX,
+        max(COST_VS_CHANCE_FLOOR_DELTA_MIN, delta),
+    )
 
 
 def _world_summary_of(quarter: Any) -> Mapping[str, Any]:
@@ -103,6 +122,7 @@ def non_regression_floor(
     iqr: float,
     base_multiplier: float = 0.9,
     clip_at_zero: bool = True,
+    lower_bound: Optional[float] = None,
 ) -> float:
     """Volatility-aware floor for a single Stage 1a criterion (spec v1.2).
 
@@ -110,10 +130,9 @@ def non_regression_floor(
     Volatile ones relax toward ``median - iqr``, so swings that already
     happened throughout Stage 1a are not treated as Stage 1b regression.
 
-    ``clip_at_zero`` is off only for normalized savings (``cost_vs_chance``).
-    That series sits near 0 and can be negative, so ``max(0, ...)`` would
-    collapse the floor to 0 and flag ordinary Stage 1a noise as regression.
-    The raw criteria stay clipped.
+    Raw criteria clip at 0. Normalized savings (``cost_vs_chance``) pass
+    ``lower_bound=δ`` instead: ``max(min(0.9*median, median-IQR), δ)``.
+    δ stops a random policy from clearing a degenerate near-zero baseline.
     """
     median_value = safe_float(median_value, 0.0)
     iqr = max(0.0, safe_float(iqr, 0.0))
@@ -121,6 +140,8 @@ def non_regression_floor(
     strict_floor = median_value * base_multiplier
     volatility_floor = median_value - iqr
     floor = min(strict_floor, volatility_floor)
+    if lower_bound is not None:
+        return max(safe_float(lower_bound, 0.0), floor)
     if clip_at_zero:
         return max(0.0, floor)
     return floor
@@ -317,7 +338,9 @@ __all__ = [
     "BASELINE_QUARTERS",
     "BASELINE_METHODS",
     "HIGH_VOLATILITY_IQR",
+    "COST_VS_CHANCE_FLOOR_DELTA",
     "MIN_QUARTERS_FOR_BASELINE",
+    "clamp_cost_vs_chance_floor_delta",
     "compute_stage_1a_baseline",
     "load_baseline",
     "load_baseline_bundle",

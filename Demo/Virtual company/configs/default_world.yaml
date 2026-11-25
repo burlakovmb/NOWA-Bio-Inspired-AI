@@ -56,6 +56,13 @@ graduation_thresholds:
   supplier_diversification: 0.40
   decision_consistency: 0.60
 
+# Stage 1a baseline parameters for the Stage 1b non-regression guard.
+stage_baseline:
+  # Lower bound of the normalized cost floor (cost_vs_chance). A degenerate
+  # or near-zero Stage 1a baseline must not let a random policy pass the
+  # guard. Allowed range: 0.02–0.05.
+  cost_vs_chance_floor_delta: 0.03
+
 output:
   results_dir: "results/"
   save_per_quarter_snapshots: true

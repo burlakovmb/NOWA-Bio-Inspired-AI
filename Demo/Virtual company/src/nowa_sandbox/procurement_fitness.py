@@ -171,6 +171,7 @@ class ProcurementFitnessEvaluator:
         thresholds: Optional[Mapping[str, float]] = None,
         stage: str = "1a",
         normalize_stockout_difficulty: bool = False,
+        cost_vs_chance_floor_delta: Optional[float] = None,
     ):
         if stage not in STAGE_CRITERIA:
             raise ValueError(
@@ -178,6 +179,17 @@ class ProcurementFitnessEvaluator:
             )
         self.stage = stage
         self.normalize_stockout_difficulty = bool(normalize_stockout_difficulty)
+        from .stage_baseline import (
+            COST_VS_CHANCE_FLOOR_DELTA,
+            clamp_cost_vs_chance_floor_delta,
+        )
+
+        raw_delta = (
+            COST_VS_CHANCE_FLOOR_DELTA
+            if cost_vs_chance_floor_delta is None
+            else cost_vs_chance_floor_delta
+        )
+        self.cost_vs_chance_floor_delta = clamp_cost_vs_chance_floor_delta(raw_delta)
         merged = dict(GRADUATION_THRESHOLDS)
         for criterion, value in dict(thresholds or {}).items():
             if criterion in merged:
@@ -600,9 +612,10 @@ class ProcurementFitnessEvaluator:
         reported as passing rather than blocking on missing data.
 
         When ``cost_vs_chance_median`` is set, ``cost_efficiency`` is judged
-        on ``cost_vs_chance`` (savings minus the chance level) against a
-        floor that is not clipped at 0. Baselines written before that field
-        keep the raw cost check.
+        on ``cost_vs_chance`` against
+        ``max(min(0.9*median, median-IQR), δ)``. δ is
+        ``cost_vs_chance_floor_delta`` (default 0.03). Baselines written
+        before the normalized fields keep the raw cost check.
         """
         from .stage_baseline import non_regression_floor
 
@@ -621,15 +634,12 @@ class ProcurementFitnessEvaluator:
                     0.0,
                 )
                 median_value = safe_float(cost_vs_chance_median, 0.0)
-                if cost_vs_chance_iqr is not None:
-                    floor = non_regression_floor(
-                        median_value,
-                        safe_float(cost_vs_chance_iqr, 0.0),
-                        base_multiplier=NON_REGRESSION_FLOOR,
-                        clip_at_zero=False,
-                    )
-                else:
-                    floor = median_value * NON_REGRESSION_FLOOR
+                floor = non_regression_floor(
+                    median_value,
+                    safe_float(cost_vs_chance_iqr, 0.0),
+                    base_multiplier=NON_REGRESSION_FLOOR,
+                    lower_bound=self.cost_vs_chance_floor_delta,
+                )
                 result[criterion] = current >= floor
                 continue
             current = safe_float(getattr(vector, criterion, 0.0), 0.0)

@@ -255,6 +255,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     fitness_evaluator = ProcurementFitnessEvaluator(
         thresholds=config.graduation_thresholds,
         stage=config.training.stage,
+        cost_vs_chance_floor_delta=config.stage_baseline.cost_vs_chance_floor_delta,
     )
     log(f"[Init] Curriculum stage {config.training.stage} "
         f"(gating on {', '.join(fitness_evaluator.gating_criteria)})")

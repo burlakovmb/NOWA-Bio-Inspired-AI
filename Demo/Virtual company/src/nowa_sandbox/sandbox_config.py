@@ -13,6 +13,10 @@ from typing import Any, Dict, Mapping, Optional
 from ._common import clamp, safe_float, safe_int
 from .procurement_fitness import GRADUATION_THRESHOLDS, STAGE_CRITERIA
 from .procurement_world import ProcurementWorldConfig
+from .stage_baseline import (
+    COST_VS_CHANCE_FLOOR_DELTA,
+    clamp_cost_vs_chance_floor_delta,
+)
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "default_world.yaml"
@@ -40,6 +44,14 @@ class TrainingConfig:
 
 
 @dataclass
+class StageBaselineConfig:
+    # Lower bound of the normalized cost floor. A degenerate or near-zero
+    # Stage 1a baseline must not let a random policy pass the Stage 1b guard.
+    # Allowed range: 0.02–0.05.
+    cost_vs_chance_floor_delta: float = COST_VS_CHANCE_FLOOR_DELTA
+
+
+@dataclass
 class OutputConfig:
     results_dir: str = "results/"
     save_per_quarter_snapshots: bool = True
@@ -52,6 +64,7 @@ class SandboxConfig:
     graduation_thresholds: Dict[str, float] = field(
         default_factory=lambda: dict(GRADUATION_THRESHOLDS)
     )
+    stage_baseline: StageBaselineConfig = field(default_factory=StageBaselineConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
 
     @classmethod
@@ -157,6 +170,16 @@ class SandboxConfig:
                 )
         config.graduation_thresholds = thresholds
 
+        baseline_cfg = dict(data.get("stage_baseline") or {})
+        config.stage_baseline = StageBaselineConfig(
+            cost_vs_chance_floor_delta=clamp_cost_vs_chance_floor_delta(
+                baseline_cfg.get(
+                    "cost_vs_chance_floor_delta",
+                    COST_VS_CHANCE_FLOOR_DELTA,
+                )
+            ),
+        )
+
         output = dict(data.get("output") or {})
         config.output = OutputConfig(
             results_dir=str(output.get("results_dir", "results/")),
@@ -219,6 +242,9 @@ class SandboxConfig:
                 "quarters_per_supplier_set": self.training.quarters_per_supplier_set,
             },
             "graduation_thresholds": dict(self.graduation_thresholds),
+            "stage_baseline": {
+                "cost_vs_chance_floor_delta": self.stage_baseline.cost_vs_chance_floor_delta,
+            },
             "output": {
                 "results_dir": self.output.results_dir,
                 "save_per_quarter_snapshots": self.output.save_per_quarter_snapshots,
@@ -229,6 +255,7 @@ class SandboxConfig:
 __all__ = [
     "SandboxConfig",
     "TrainingConfig",
+    "StageBaselineConfig",
     "OutputConfig",
     "DEFAULT_CONFIG_PATH",
 ]

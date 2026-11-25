@@ -194,11 +194,24 @@ class TestStage1bReinterpretedWithNewFloor:
 
 class TestNormalizedSavingsBaseline:
 
-    def test_floor_for_normalized_savings_is_not_clipped_at_zero(self):
-        clipped = non_regression_floor(0.0, 0.2)
-        open_floor = non_regression_floor(0.0, 0.2, clip_at_zero=False)
-        assert clipped == 0.0
-        assert open_floor == pytest.approx(-0.2)
+    def test_normalized_floor_is_at_least_delta(self):
+        from nowa_sandbox.stage_baseline import COST_VS_CHANCE_FLOOR_DELTA
+
+        statistical = non_regression_floor(0.0, 0.2, clip_at_zero=False)
+        guarded = non_regression_floor(
+            0.0, 0.2, lower_bound=COST_VS_CHANCE_FLOOR_DELTA
+        )
+        assert statistical == pytest.approx(-0.2)
+        assert guarded == pytest.approx(COST_VS_CHANCE_FLOOR_DELTA)
+
+    def test_floor_unchanged_when_both_terms_exceed_delta(self):
+        median, iqr, delta = 0.40, 0.05, 0.03
+        strict = 0.9 * median
+        volatility = median - iqr
+        assert strict > delta and volatility > delta
+        assert non_regression_floor(median, iqr, lower_bound=delta) == pytest.approx(
+            min(strict, volatility)
+        )
 
     def test_median_baseline_stores_cost_vs_chance_when_present(self):
         values = [0.02 * (i - 7) for i in range(15)]
