@@ -7,7 +7,13 @@ time (unlike the universal BusinessEventEncoder used for real MCP data).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping, Optional
+
+from .price_memory import (
+    DEFAULT_PRICE_BUCKET_Z,
+    lookup_price_reference,
+    price_context_token,
+)
 
 from ._common import clamp, ensure_core_src_on_path, safe_float
 
@@ -70,6 +76,11 @@ class SandboxEncoder:
         self,
         world: Any,
         tick_result: dict,
+        supplier_obs: Optional[Mapping[str, Any]] = None,
+        price_references: Optional[Mapping[str, Any]] = None,
+        *,
+        price_perception: bool = True,
+        price_bucket_z: float = DEFAULT_PRICE_BUCKET_Z,
     ) -> List[str]:
         tokens: List[str] = []
 
@@ -81,6 +92,7 @@ class SandboxEncoder:
         # agent is not given a full state dump, in the same way a real employee
         # reads an alert dashboard instead of the whole database.
         stock = world.observe_stock_levels()
+        show_price = bool(price_perception) and supplier_obs is not None
         for pid, info in stock.items():
             below = bool(info.get("below_reorder_point"))
             if "below_replenishment_point" in info:
@@ -88,6 +100,17 @@ class SandboxEncoder:
             if below:
                 tokens.append(f"product:{pid}")
                 tokens.append("status:below_reorder_point")
+                # One coarse band. Quotes come from the observation already
+                # built for this day; omitting it keeps the previous tokens.
+                if show_price:
+                    tokens.append(
+                        price_context_token(
+                            pid,
+                            supplier_obs,
+                            lookup_price_reference(price_references, pid),
+                            price_bucket_z,
+                        )
+                    )
 
         # 3. Budget context — most severe band wins.
         budget = world.observe_budget_status()

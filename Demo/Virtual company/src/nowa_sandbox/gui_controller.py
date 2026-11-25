@@ -269,6 +269,7 @@ class RunController:
             resume_from=spec.resume_from,
             no_stop_on_graduation=not spec.stop_on_graduation,
             no_seed_intuition=not spec.seed_intuition,
+            no_price_perception=False,
             quiet=True,
         )
 
@@ -477,6 +478,10 @@ class RunController:
             quarters_per_supplier_set=config.training.quarters_per_supplier_set,
             cost_vs_chance_median=baseline_bundle.get("cost_vs_chance_median"),
             cost_vs_chance_iqr=baseline_bundle.get("cost_vs_chance_iqr"),
+            price_perception=config.training.price_perception,
+            price_memory_alpha=config.training.price_memory_alpha,
+            price_bucket_z=config.training.price_bucket_z,
+            price_reward_gain=config.training.price_reward_gain,
         )
         trainer.quarter_overrides = {
             int(k): dict(v) for k, v in dict(spec.quarter_overrides or {}).items()
@@ -486,9 +491,7 @@ class RunController:
             trainer.curriculum = curriculum
             trainer.max_cycles = int(getattr(spec, "max_cycles", 500) or 500)
         if checkpoint is not None:
-            trainer.carried_suppliers = (checkpoint.metadata or {}).get(
-                "carried_suppliers"
-            )
+            trainer.restore_checkpoint_metadata(checkpoint.metadata)
 
         carry = config.training.stage == "1b"
         if carry:
@@ -549,7 +552,7 @@ class RunController:
                     agent,
                     result,
                     rng=rng,
-                    metadata={"carried_suppliers": trainer.carried_suppliers},
+                    metadata=trainer.checkpoint_metadata(),
                 )
                 self.last_checkpoint = checkpoint_path
 
