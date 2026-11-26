@@ -18,8 +18,12 @@ from death_registry import DeathRegistry
 from birth_registry import BirthRegistry
 from colony_gui.utils import canonical_display_name
 from shared_resources import SharedResources
+from zone_snapshot import ZoneSnapshot
 
 logger = logging.getLogger(__name__)
+
+# Zones where animals contend for something: a bowl, the waterer, the wheel, the dust bath.
+CONTESTED_ZONES = frozenset({"bowl_pellets", "bowl_hay", "waterer", "wheel", "dustbath"})
 
 
 class SimulationRunner:
@@ -36,12 +40,18 @@ class SimulationRunner:
         self,
         factory: Optional[Any] = None,
         death_journal_path: str | Path | None = None,
+        seed: int | None = None,
     ) -> None:
         self.agents: list[ChinchillaAgent] = []
         self.resources = SharedResources()
         self.sim_time = 0.0
         self._refill_enabled = True
-        self.swarm = ColonySwarmBridge(factory=factory)
+        # The colony's own generator: the turn-order noise and the swarm. A seed makes a run repeatable; the NOWA
+        # core inside each animal still samples actions from the module-level random (issue #14), which the caller
+        # seeds for a repeatable run. Without a seed the colony's generator is drawn from the module-level one, so a
+        # caller that seeds only that (as the old shuffled tick allowed) still gets a repeatable run.
+        self._rng = random.Random(seed if seed is not None else random.random())
+        self.swarm = ColonySwarmBridge(factory=factory, rng=random.Random(self._rng.random()))
         self.births_this_step = 0
         self.deaths_this_step = 0
         self.total_births = 0
@@ -121,16 +131,48 @@ class SimulationRunner:
         for _ in range(steps):
             self._tick_once(step)
 
+    def _turn_order(self, snapshot: ZoneSnapshot) -> list[ChinchillaAgent]:
+        """Turn order of one tick, which settles contests for a resource (the last food, the wheel) in one pass.
+
+        First the animals already standing at a contested resource, then the more dominant ones, and a tie is
+        broken by noise from the colony's seeded generator. Dominance comes from experience: the animal's dominance
+        axis plus how dominant it feels over the animals sharing its zone (``dominance_felt``, moved by encounters).
+        An animal that loses a contest gets the usual "missed out" event in its own step.
+        """
+        keyed = []
+        for animal in snapshot.order:
+            animal_id = str(animal.agent_id)
+            zone = snapshot.zone.get(animal_id, str(animal.position))
+            felt = [
+                float(known.dominance_felt)
+                for other in snapshot.near(zone)
+                if other is not animal and snapshot.zone.get(str(other.agent_id)) == zone
+                for known in (animal.knowledge.get(other.agent_id),)
+                if known is not None
+            ]
+            dominance = float(animal.dominance_level) + (sum(felt) / len(felt) if felt else 0.0)
+            at_resource = 0 if zone in CONTESTED_ZONES else 1
+            keyed.append(((at_resource, -dominance, self._rng.random()), animal))
+        keyed.sort(key=lambda item: item[0])
+        return [animal for _key, animal in keyed]
+
     def _tick_once(self, dt: float) -> None:
         self.sim_time += dt
 
         self.swarm.sync_positions()
         self.swarm.update_signals()
 
-        shuffled = list(self.agents)
-        random.shuffle(shuffled)
-        for agent in shuffled:
-            agent.sim_step(dt)
+        # One snapshot per tick (issue #28): every animal perceives the colony as it stood at the start of the tick,
+        # through the zone adjacency matrix, so what it perceives does not depend on the turn order.
+        snapshot = ZoneSnapshot(self.agents)
+        for agent in snapshot.order:
+            agent._zone_snapshot = snapshot
+        try:
+            for agent in self._turn_order(snapshot):
+                agent.sim_step(dt)
+        finally:
+            for agent in snapshot.order:
+                agent._zone_snapshot = None
 
         self.swarm.sync_positions()
         dead_ids = self.swarm.check_mortality()

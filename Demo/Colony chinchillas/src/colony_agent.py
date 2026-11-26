@@ -62,7 +62,7 @@ from colony_reproduction_helpers import (
     choose_litter_size,
     resource_blocks_reproduction,
 )
-from sensor_system import ADJACENT_ZONES, is_same_or_adjacent
+from sensor_system import ADJACENT_ZONES, NEIGHBOURS, is_same_or_adjacent
 from shared_resources import SharedResources
 from social_layer import PendingOffer
 from social_offers import SOCIAL_OFFER_TYPES, SocialOffer, SocialResponse
@@ -267,6 +267,7 @@ class ChinchillaAgent(Agent):
     """Chinchilla entity with full NOWA cognitive stack and colony behaviors."""
 
     _name_index = 0
+    _zone_snapshot = None  # class default, so an animal restored without __init__ still reads "no snapshot"
     _generation_name_counters: dict[int, int] = {}
     _formatted_name_pattern = re.compile(
         r"^G(?P<generation>[0-9]+)A(?P<index>[0-9]+)(?:S(?P<sex>[MFU]))?$"
@@ -385,6 +386,8 @@ class ChinchillaAgent(Agent):
 
         self.knowledge: dict[str, KnownAgent] = {}
         self.perceived_others: list[PerceivedOther] = []
+        # The runner's snapshot of the colony for the current tick (zone_snapshot.ZoneSnapshot), or None outside one.
+        self._zone_snapshot = None
 
         self.is_mature: bool = (age >= MATURITY_AGE_S) if is_mature is None else is_mature
         self.heat_cycle: HeatCycle | None = HeatCycle() if sex == "F" and self.is_mature else None
@@ -1227,6 +1230,12 @@ class ChinchillaAgent(Agent):
         zone = str(self.position)
         if zone not in FOOD_BOWL_ZONES:
             return 0.0
+        snapshot = self._zone_snapshot
+        if snapshot is not None:
+            # Eaters at the start of the tick, from the snapshot; this animal's own action as it is now.
+            claimants = sum(1 for other in snapshot.eaters_in(zone) if other is not self)
+            claimants += 1 if str(self.current_action) == "eat" else 0
+            return 0.0 if claimants <= 1 else BOWL_CROWD_CONFLICT * float(claimants - 1)
         claimants = 0
         saw_self = False
         for other in self.colony:
@@ -1721,10 +1730,7 @@ class ChinchillaAgent(Agent):
 
     def _perceive(self) -> None:
         self.perceived_others = []
-        for other in self.colony:
-            if other is self:
-                continue
-            public = other.get_public_state()
+        for other, public in self._perception_candidates():
             known = self.knowledge.get(other.agent_id)
             if known is not None:
                 if public.position == self.position:
@@ -1747,16 +1753,33 @@ class ChinchillaAgent(Agent):
                 )
         self._perceive_alarm_calls()
 
+    def _perception_candidates(self) -> list[tuple["ChinchillaAgent", object]]:
+        """(animal, public state) for every animal this one may perceive, in colony order.
+
+        Perceived are the animals in this zone or the next one and every known animal wherever it is. With the
+        runner's tick snapshot they come from this zone's row of the adjacency matrix plus the known ones, with the
+        public state recorded at the start of the tick; without one, from a scan of the colony.
+        """
+        snapshot = self._zone_snapshot
+        if snapshot is None:
+            return [(other, other.get_public_state()) for other in self.colony if other is not self]
+        chosen: dict[int, "ChinchillaAgent"] = {}
+        for other in snapshot.near(self.position):
+            chosen[snapshot.index[str(other.agent_id)]] = other
+        for other_id in self.knowledge:
+            position = snapshot.index.get(str(other_id))
+            if position is not None:
+                chosen[position] = snapshot.by_id[str(other_id)]
+        return [
+            (chosen[position], snapshot.public[str(chosen[position].agent_id)])
+            for position in sorted(chosen)
+            if chosen[position] is not self
+        ]
+
     def _perceive_alarm_calls(self) -> None:
         self._alarm_heard_this_tick = False
         now = float(self.sim_time)
-        for other in self.colony:
-            if other is self or not other._is_emitting_alarm():
-                continue
-            # Same zone or a neighbour. A distant bark is not this animal's event.
-            if not is_same_or_adjacent(self.position, other.position):
-                continue
-            event_id = int(getattr(other, "_alarm_event_id", 0))
+        for other, other_position, event_id in self._audible_alarm_calls():
             if self._alarm_heard.get(other.agent_id) == event_id:
                 continue
             self._alarm_heard[other.agent_id] = event_id
@@ -1773,8 +1796,38 @@ class ChinchillaAgent(Agent):
                 intensity=ALARM_IMPULSE_INTENSITY,
             )
             if known is not None:
-                known.last_seen_position = other.position
+                known.last_seen_position = other_position
                 known.last_seen_affect = "fearful"
+
+    def _audible_alarm_calls(self) -> list[tuple["ChinchillaAgent", str, int]]:
+        """(caller, its zone, event id) for alarm calls in this zone or the next one.
+
+        With the runner's tick snapshot: calls as they stood at the start of the tick, from this zone's row of the
+        adjacency matrix. Without one (an animal stepped on its own): a scan of the colony as it is now.
+        """
+        snapshot = self._zone_snapshot
+        if snapshot is not None:
+            return [
+                (other, snapshot.zone[str(other.agent_id)], snapshot.alarm_event[str(other.agent_id)])
+                for other in snapshot.near(self.position)
+                if other is not self and str(other.agent_id) in snapshot.alarm_event
+            ]
+        calls = []
+        for other in self.colony:
+            if other is self or not other._is_emitting_alarm():
+                continue
+            # Same zone or a neighbour. A distant bark is not this animal's event.
+            if not is_same_or_adjacent(self.position, other.position):
+                continue
+            calls.append((other, other.position, int(getattr(other, "_alarm_event_id", 0))))
+        return calls
+
+    def _animals_near(self) -> list["ChinchillaAgent"]:
+        """Animals in this zone or the next one: the tick snapshot's row of A, or a scan without a snapshot."""
+        snapshot = self._zone_snapshot
+        if snapshot is not None:
+            return snapshot.near(self.position)
+        return [other for other in self.colony if is_same_or_adjacent(self.position, other.position)]
 
     def _is_emitting_alarm(self) -> bool:
         self._ensure_alarm_call()
@@ -1850,10 +1903,8 @@ class ChinchillaAgent(Agent):
 
     def _alarm_social_buffer(self, caller_id: str) -> float:
         """A bonded neighbour, other than the caller, damps the acute impulse."""
-        for other in self.colony:
+        for other in self._animals_near():
             if other is self or other.agent_id == caller_id:
-                continue
-            if not is_same_or_adjacent(self.position, other.position):
                 continue
             known = self.knowledge.get(other.agent_id)
             if known is None:
@@ -2883,7 +2934,12 @@ class ChinchillaAgent(Agent):
     def _find_agent_by_id(self, agent_id: str | None) -> "ChinchillaAgent" | None:
         if agent_id is None:
             return None
-        for agent in self.colony:
+        snapshot = self._zone_snapshot
+        if snapshot is not None:
+            found = snapshot.by_id.get(str(agent_id))
+            if found is not None:
+                return found
+        for agent in self.colony:  # no snapshot, or born during this tick
             if agent.agent_id == agent_id:
                 return agent
         return None
@@ -2973,7 +3029,7 @@ class ChinchillaAgent(Agent):
         normalized_targets = [str(zone) for zone in target_zones if str(zone)]
         if not normalized_targets:
             return False
-        neighbors = list(ADJACENT_ZONES.get(self.position, set()))
+        neighbors = list(NEIGHBOURS.get(self.position, ()))
         if self.position in normalized_targets:
             if not relocate_within_targets:
                 return False
@@ -3004,7 +3060,7 @@ class ChinchillaAgent(Agent):
         if not targets:
             return []
 
-        direct_neighbors = list(ADJACENT_ZONES.get(source_zone, set()))
+        direct_neighbors = list(NEIGHBOURS.get(source_zone, ()))
         direct_hits = [zone for zone in direct_neighbors if zone in targets]
         if direct_hits:
             return direct_hits
@@ -3050,7 +3106,7 @@ class ChinchillaAgent(Agent):
     def _maybe_move_position(self, *, force: bool = False) -> None:
         if (not force) and (self.sim_time - self._last_position_change_time) < MIN_ACTION_MOVE_INTERVAL_S:
             return
-        neighbors = list(ADJACENT_ZONES.get(self.position, set()))
+        neighbors = list(NEIGHBOURS.get(self.position, ()))
         if neighbors:
             self._set_position(self._rng.choice(neighbors))
             return
