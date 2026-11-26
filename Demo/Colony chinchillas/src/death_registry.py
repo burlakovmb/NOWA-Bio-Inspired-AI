@@ -363,7 +363,9 @@ class DeathRegistry:
         agent: Any,
         sim_time: float,
         generation_index_map: dict[str, int],
+        autosave: bool = True,
     ) -> AgentMemorial:
+        """Record a death. ``autosave=False`` lets a caller write the registry once for several deaths."""
         agent_id = _safe_str(getattr(agent, "agent_id", ""), "")
         birth_sim_time = self.get_birth_time(agent_id)
         memorial = _extract_memorial(
@@ -378,7 +380,7 @@ class DeathRegistry:
                 inferred_birth = max(0.0, memorial.death_sim_time - max(0.0, memorial.age_at_death))
                 self._birth_times[memorial.agent_id] = inferred_birth
             self._trim_memorials()
-            if self._save_dir is not None:
+            if autosave and self._save_dir is not None:
                 self.autosave()
         return memorial
 

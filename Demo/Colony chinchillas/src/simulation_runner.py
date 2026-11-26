@@ -134,8 +134,7 @@ class SimulationRunner:
 
         self.swarm.sync_positions()
         dead_ids = self.swarm.check_mortality()
-        for agent_id in dead_ids:
-            self._handle_agent_death(agent_id)
+        self._handle_agent_deaths(dead_ids)
 
         self.swarm.check_reproduction()
         self._spawn_pending_offspring()
@@ -175,16 +174,56 @@ class SimulationRunner:
             self.total_births += admitted
 
     def _handle_agent_death(self, agent_id: str) -> None:
-        dead_agent = next((agent for agent in self.agents if agent.agent_id == agent_id), None)
-        if dead_agent is not None:
-            generation_index_map = self._build_generation_index_map()
-            self.death_registry.register_death(dead_agent, self.sim_time, generation_index_map)
-        self.agents[:] = [agent for agent in self.agents if agent.agent_id != agent_id]
-        entry = self._build_death_entry(agent_id=agent_id, agent=dead_agent)
-        self._death_log.append(entry)
-        self._append_death_entry(entry)
-        self.deaths_this_step += 1
-        self.total_deaths += 1
+        self._handle_agent_deaths([agent_id])
+
+    def _handle_agent_deaths(self, agent_ids) -> None:
+        """Record the deaths of one tick (issue #28).
+
+        The generation index map is built once per tick and the registry file is written once, instead of a
+        full map rebuild and a full registry rewrite per death. Memorials and journal entries are the same as
+        handling the deaths one by one: each death gets the index of its agent among the agents still alive
+        at that point, with earlier deaths of the tick already removed.
+        """
+        agent_ids = [str(agent_id) for agent_id in agent_ids]
+        if not agent_ids:
+            return
+        by_id: dict[str, ChinchillaAgent] = {}
+        for agent in self.agents:
+            by_id.setdefault(agent.agent_id, agent)  # the first match, as the one-by-one lookup found it
+        generation_index_map = self._build_generation_index_map()
+        generation_of = {
+            str(getattr(agent, "agent_id", "")): int(getattr(agent, "generation", 0) or 0) for agent in self.agents
+        }
+        removed: set[str] = set()
+        registered = False
+        for agent_id in agent_ids:
+            dead_agent = by_id.get(agent_id) if agent_id not in removed else None
+            if dead_agent is not None:
+                self.death_registry.register_death(
+                    dead_agent, self.sim_time, generation_index_map, autosave=False
+                )
+                registered = True
+                self._drop_from_generation_index(generation_index_map, generation_of, agent_id)
+            removed.add(agent_id)
+            entry = self._build_death_entry(agent_id=agent_id, agent=dead_agent)
+            self._death_log.append(entry)
+            self._append_death_entry(entry)
+            self.deaths_this_step += 1
+            self.total_deaths += 1
+        self.agents[:] = [agent for agent in self.agents if agent.agent_id not in removed]
+        if registered:
+            self.death_registry.autosave()
+
+    @staticmethod
+    def _drop_from_generation_index(index_map: dict[str, int], generation_of: dict[str, int], agent_id: str) -> None:
+        """Remove a dead agent from the map and close the gap in its generation, as a rebuild would."""
+        position = index_map.pop(agent_id, None)
+        if position is None:
+            return
+        generation = generation_of.get(agent_id)
+        for other, other_position in index_map.items():
+            if other_position > position and generation_of.get(other) == generation:
+                index_map[other] = other_position - 1
 
     def _maybe_refill_resources(self) -> None:
         if self.sim_time - self.resources.last_refill_time < REFILL_DAY_S:

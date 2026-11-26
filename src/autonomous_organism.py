@@ -15,6 +15,9 @@ from basal_ganglia import NO_ACTION
 # state that the drive and energy systems already hold. The counter below
 # stays equal to the number of steps, which snapshot reports as tick_count.
 TICK_HISTORY_RETAIN = 1
+# failure_log keeps the most recent soft failures for inspection and the save
+# (issue #28): enough to see what went wrong lately, bounded over a long life.
+FAILURE_LOG_RETAIN = 256
 
 DRIVE_NAMES: Tuple[str, ...] = (
     "curiosity",
@@ -1131,6 +1134,12 @@ class AutonomousOrganismAgent:
                 "details": dict(details or {}),
             }
         )
+        self._trim_failure_log()
+
+    def _trim_failure_log(self) -> None:
+        extra = len(self.failure_log) - FAILURE_LOG_RETAIN
+        if extra > 0:
+            del self.failure_log[:extra]
 
     def _sanitize_dt(self, dt: float) -> Tuple[float, float]:
         raw_dt = _f(dt, 0.0)
