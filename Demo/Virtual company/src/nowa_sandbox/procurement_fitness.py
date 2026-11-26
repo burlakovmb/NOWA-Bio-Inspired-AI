@@ -171,6 +171,7 @@ class ProcurementFitnessEvaluator:
         thresholds: Optional[Mapping[str, float]] = None,
         stage: str = "1a",
         normalize_stockout_difficulty: bool = False,
+        cost_vs_chance_floor_delta: Optional[float] = None,
     ):
         if stage not in STAGE_CRITERIA:
             raise ValueError(
@@ -178,6 +179,17 @@ class ProcurementFitnessEvaluator:
             )
         self.stage = stage
         self.normalize_stockout_difficulty = bool(normalize_stockout_difficulty)
+        from .stage_baseline import (
+            COST_VS_CHANCE_FLOOR_DELTA,
+            clamp_cost_vs_chance_floor_delta,
+        )
+
+        raw_delta = (
+            COST_VS_CHANCE_FLOOR_DELTA
+            if cost_vs_chance_floor_delta is None
+            else cost_vs_chance_floor_delta
+        )
+        self.cost_vs_chance_floor_delta = clamp_cost_vs_chance_floor_delta(raw_delta)
         merged = dict(GRADUATION_THRESHOLDS)
         for criterion, value in dict(thresholds or {}).items():
             if criterion in merged:
@@ -293,6 +305,91 @@ class ProcurementFitnessEvaluator:
                 # 1.0 at cheapest available, 0.0 at most expensive.
                 scores.append(clamp(1.0 - ((paid - lo) / (hi - lo)), 0.0, 1.0))
 
+        if not scores:
+            return 0.5
+        return clamp(sum(scores) / len(scores), 0.0, 1.0)
+
+    def chance_cost_efficiency(self, world: Any, decision_log: List[dict]) -> float:
+        """Expected cost score of a uniform random supplier at the same orders.
+
+        For each accepted order the agent actually placed, average the
+        per-supplier score over every supplier available for that SKU, on
+        the same scale as :meth:`_cost_efficiency` /
+        :meth:`_cost_efficiency_from_offers`, then average those order
+        scores the same way the agent score is averaged. No orders uses
+        the same neutral 0.5 as an empty quarter.
+        """
+        orders = _accepted_orders(decision_log)
+        if not orders:
+            return 0.5
+        offers = getattr(world, "offers", None) or {}
+        if offers:
+            return self._chance_cost_efficiency_from_offers(world, orders)
+        return self._chance_cost_efficiency_from_multipliers(world, orders)
+
+    def _chance_cost_efficiency_from_multipliers(
+        self, world: Any, orders: List[dict]
+    ) -> float:
+        """Legacy roster: every supplier can fill every SKU. Quote noise ignored."""
+        suppliers = getattr(world, "suppliers", {}) or {}
+        pool = [
+            safe_float(getattr(supplier, "base_price_multiplier", 1.0), 1.0)
+            for supplier in suppliers.values()
+        ]
+        if not pool:
+            return 0.5
+        expected_ratio = sum(pool) / len(pool)
+        ratios = []
+        for order in orders:
+            if suppliers.get(order.get("supplier_id")) is not None:
+                ratios.append(expected_ratio)
+        if not ratios:
+            return 0.5
+        avg_ratio = sum(ratios) / len(ratios)
+        span = MARKET_PRICE_CEILING - MARKET_PRICE_FLOOR
+        if span <= 0:
+            return 0.5
+        score = 1.0 - ((avg_ratio - MARKET_PRICE_FLOOR) / span)
+        return clamp(score, 0.0, 1.0)
+
+    def _chance_cost_efficiency_from_offers(
+        self, world: Any, orders: List[dict]
+    ) -> float:
+        """Mean offer-score of every offer for the ordered SKU, then mean over orders."""
+        scores: List[float] = []
+        for order in orders:
+            pid = str(order.get("product_id") or "")
+            sid = str(order.get("supplier_id") or "")
+            if not pid or not sid:
+                continue
+            product_offers = []
+            if hasattr(world, "offers_for_product"):
+                product_offers = list(world.offers_for_product(pid) or [])
+            if not product_offers:
+                continue
+            prices = [
+                max(0.01, safe_float(o.unit_price, 0.01)) for o in product_offers
+            ]
+            lo = min(prices)
+            hi = max(prices)
+            paid = None
+            result = _result_of(order)
+            if "unit_price" in result:
+                paid = safe_float(result.get("unit_price"), 0.0) or None
+            if paid is None and hasattr(world, "get_offer"):
+                offer = world.get_offer(pid, sid)
+                if offer is not None:
+                    paid = safe_float(offer.unit_price, 0.0) or None
+            if paid is None or paid <= 0:
+                continue
+            if hi <= lo + 1e-12:
+                order_scores = [1.0]
+            else:
+                order_scores = [
+                    clamp(1.0 - ((price - lo) / (hi - lo)), 0.0, 1.0)
+                    for price in prices
+                ]
+            scores.append(sum(order_scores) / len(order_scores))
         if not scores:
             return 0.5
         return clamp(sum(scores) / len(scores), 0.0, 1.0)
@@ -498,6 +595,9 @@ class ProcurementFitnessEvaluator:
         vector: ProcurementFitnessVector,
         stage_1a_baseline: Mapping[str, float],
         stage_1a_spread_iqr: Optional[Mapping[str, float]] = None,
+        cost_vs_chance: Optional[float] = None,
+        cost_vs_chance_median: Optional[float] = None,
+        cost_vs_chance_iqr: Optional[float] = None,
     ) -> Dict[str, bool]:
         """Verify Stage 1a competence survived into Stage 1b.
 
@@ -510,6 +610,12 @@ class ProcurementFitnessEvaluator:
 
         A criterion absent from the baseline gets a floor of 0.0, i.e. it is
         reported as passing rather than blocking on missing data.
+
+        When ``cost_vs_chance_median`` is set, ``cost_efficiency`` is judged
+        on ``cost_vs_chance`` against
+        ``max(min(0.9*median, median-IQR), δ)``. δ is
+        ``cost_vs_chance_floor_delta`` (default 0.03). Baselines written
+        before the normalized fields keep the raw cost check.
         """
         from .stage_baseline import non_regression_floor
 
@@ -517,6 +623,25 @@ class ProcurementFitnessEvaluator:
         spread = stage_1a_spread_iqr or {}
         result: Dict[str, bool] = {}
         for criterion in STAGE_1A_CRITERIA:
+            if (
+                criterion == "cost_efficiency"
+                and cost_vs_chance_median is not None
+            ):
+                current = safe_float(
+                    cost_vs_chance
+                    if cost_vs_chance is not None
+                    else getattr(vector, criterion, 0.0),
+                    0.0,
+                )
+                median_value = safe_float(cost_vs_chance_median, 0.0)
+                floor = non_regression_floor(
+                    median_value,
+                    safe_float(cost_vs_chance_iqr, 0.0),
+                    base_multiplier=NON_REGRESSION_FLOOR,
+                    lower_bound=self.cost_vs_chance_floor_delta,
+                )
+                result[criterion] = current >= floor
+                continue
             current = safe_float(getattr(vector, criterion, 0.0), 0.0)
             if criterion not in baseline:
                 result[criterion] = True

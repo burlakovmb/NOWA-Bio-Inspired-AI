@@ -12,7 +12,16 @@ from typing import Any, Dict, Mapping, Optional
 
 from ._common import clamp, safe_float, safe_int
 from .procurement_fitness import GRADUATION_THRESHOLDS, STAGE_CRITERIA
+from .price_memory import (
+    DEFAULT_PRICE_BUCKET_Z,
+    DEFAULT_PRICE_MEMORY_ALPHA,
+    DEFAULT_PRICE_REWARD_GAIN,
+)
 from .procurement_world import ProcurementWorldConfig
+from .stage_baseline import (
+    COST_VS_CHANCE_FLOOR_DELTA,
+    clamp_cost_vs_chance_floor_delta,
+)
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "default_world.yaml"
@@ -24,6 +33,33 @@ def _valid_stage(value: Any) -> str:
     return stage if stage in STAGE_CRITERIA else "1a"
 
 
+def _price_memory_alpha(value: Any, default: float) -> float:
+    number = safe_float(value, default)
+    if not 0.0 < number <= 1.0:
+        raise ValueError(
+            f"training.price_memory_alpha must be in (0, 1], got {value!r}"
+        )
+    return number
+
+
+def _price_bucket_z(value: Any, default: float) -> float:
+    number = safe_float(value, default)
+    if not number > 0.0:
+        raise ValueError(
+            f"training.price_bucket_z must be > 0, got {value!r}"
+        )
+    return number
+
+
+def _price_reward_gain(value: Any, default: float) -> float:
+    number = safe_float(value, default)
+    if not 0.0 <= number <= 0.4:
+        raise ValueError(
+            f"training.price_reward_gain must be in [0, 0.4], got {value!r}"
+        )
+    return number
+
+
 @dataclass
 class TrainingConfig:
     n_quarters: int = 30
@@ -33,6 +69,24 @@ class TrainingConfig:
     seed_intuition: bool = True
     stage: str = "1a"
     """Curriculum stage (v1.1 section 26): "1a" rotating suppliers, "1b" persistent."""
+    # Stage 1b only. K supplier sets, each held for quarters_per_supplier_set
+    # quarters counted from the first Stage 1b quarter.
+    supplier_set_count: int = 4
+    quarters_per_supplier_set: int = 5
+    # Coarse price band in context, and felt cost on an accepted order.
+    # Off keeps the previous tokens and the flat 0.4 reward.
+    price_perception: bool = True
+    price_memory_alpha: float = DEFAULT_PRICE_MEMORY_ALPHA
+    price_bucket_z: float = DEFAULT_PRICE_BUCKET_Z
+    price_reward_gain: float = DEFAULT_PRICE_REWARD_GAIN
+
+
+@dataclass
+class StageBaselineConfig:
+    # Lower bound of the normalized cost floor. A degenerate or near-zero
+    # Stage 1a baseline must not let a random policy pass the Stage 1b guard.
+    # Allowed range: 0.02–0.05.
+    cost_vs_chance_floor_delta: float = COST_VS_CHANCE_FLOOR_DELTA
 
 
 @dataclass
@@ -48,6 +102,7 @@ class SandboxConfig:
     graduation_thresholds: Dict[str, float] = field(
         default_factory=lambda: dict(GRADUATION_THRESHOLDS)
     )
+    stage_baseline: StageBaselineConfig = field(default_factory=StageBaselineConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
 
     @classmethod
@@ -122,6 +177,7 @@ class SandboxConfig:
         )
 
         training = dict(data.get("training") or {})
+        defaults_training = TrainingConfig()
         config.training = TrainingConfig(
             n_quarters=safe_int(training.get("n_quarters", 30), 30, minimum=0),
             sleep_every_n_days=safe_int(training.get("sleep_every_n_days", 7), 7, minimum=1),
@@ -129,6 +185,40 @@ class SandboxConfig:
             seed=safe_int(training.get("seed", 42), 42),
             seed_intuition=bool(training.get("seed_intuition", True)),
             stage=_valid_stage(training.get("stage", "1a")),
+            supplier_set_count=safe_int(
+                training.get("supplier_set_count", defaults_training.supplier_set_count),
+                defaults_training.supplier_set_count,
+                minimum=1,
+            ),
+            quarters_per_supplier_set=safe_int(
+                training.get(
+                    "quarters_per_supplier_set",
+                    defaults_training.quarters_per_supplier_set,
+                ),
+                defaults_training.quarters_per_supplier_set,
+                minimum=1,
+            ),
+            price_perception=bool(
+                training.get(
+                    "price_perception", defaults_training.price_perception
+                )
+            ),
+            price_memory_alpha=_price_memory_alpha(
+                training.get(
+                    "price_memory_alpha", defaults_training.price_memory_alpha
+                ),
+                defaults_training.price_memory_alpha,
+            ),
+            price_bucket_z=_price_bucket_z(
+                training.get("price_bucket_z", defaults_training.price_bucket_z),
+                defaults_training.price_bucket_z,
+            ),
+            price_reward_gain=_price_reward_gain(
+                training.get(
+                    "price_reward_gain", defaults_training.price_reward_gain
+                ),
+                defaults_training.price_reward_gain,
+            ),
         )
 
         thresholds = dict(GRADUATION_THRESHOLDS)
@@ -138,6 +228,16 @@ class SandboxConfig:
                     safe_float(value, thresholds[criterion]), 0.0, 1.0
                 )
         config.graduation_thresholds = thresholds
+
+        baseline_cfg = dict(data.get("stage_baseline") or {})
+        config.stage_baseline = StageBaselineConfig(
+            cost_vs_chance_floor_delta=clamp_cost_vs_chance_floor_delta(
+                baseline_cfg.get(
+                    "cost_vs_chance_floor_delta",
+                    COST_VS_CHANCE_FLOOR_DELTA,
+                )
+            ),
+        )
 
         output = dict(data.get("output") or {})
         config.output = OutputConfig(
@@ -197,8 +297,17 @@ class SandboxConfig:
                 "seed": self.training.seed,
                 "seed_intuition": self.training.seed_intuition,
                 "stage": self.training.stage,
+                "supplier_set_count": self.training.supplier_set_count,
+                "quarters_per_supplier_set": self.training.quarters_per_supplier_set,
+                "price_perception": self.training.price_perception,
+                "price_memory_alpha": self.training.price_memory_alpha,
+                "price_bucket_z": self.training.price_bucket_z,
+                "price_reward_gain": self.training.price_reward_gain,
             },
             "graduation_thresholds": dict(self.graduation_thresholds),
+            "stage_baseline": {
+                "cost_vs_chance_floor_delta": self.stage_baseline.cost_vs_chance_floor_delta,
+            },
             "output": {
                 "results_dir": self.output.results_dir,
                 "save_per_quarter_snapshots": self.output.save_per_quarter_snapshots,
@@ -209,6 +318,7 @@ class SandboxConfig:
 __all__ = [
     "SandboxConfig",
     "TrainingConfig",
+    "StageBaselineConfig",
     "OutputConfig",
     "DEFAULT_CONFIG_PATH",
 ]

@@ -8,6 +8,14 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from ._common import ensure_core_src_on_path
+from .price_memory import (
+    DEFAULT_PRICE_BUCKET_Z,
+    DEFAULT_PRICE_MEMORY_ALPHA,
+    DEFAULT_PRICE_REWARD_GAIN,
+    PriceMemory,
+    felt_accepted_reward,
+    perceived_product_ids,
+)
 from .procurement_fitness import ProcurementFitnessEvaluator, ProcurementFitnessVector
 from .procurement_hippocampus_seeder import ProcurementHippocampusSeeder
 from .procurement_motor_adapter import OrderParams, ProcurementMotorAdapter
@@ -15,6 +23,7 @@ from .procurement_world import (
     ProcurementWorld,
     ProcurementWorldConfig,
     VirtualSupplier,
+    quarter_world_seed,
 )
 from .sandbox_encoder import SandboxEncoder
 
@@ -75,6 +84,34 @@ def _current_qualifying_streak(
     return streak
 
 
+def _ensure_stage_1b_start(
+    result: "SandboxTrainingResult",
+    start_index: int,
+    has_carried_roster: bool,
+) -> None:
+    """Record the first Stage 1b quarter, including after ``--resume-from``.
+
+    No marker and no carried roster: this quarter opens Stage 1b (a fresh
+    run, or a resume of a Stage 1a checkpoint whose next quarter_index is
+    31). No marker but a restored roster: a checkpoint from before set
+    rotation. Anchor at quarter 1 so those counterparties stay until a
+    boundary of the new schedule.
+    """
+    if result.stage_1b_start_quarter is not None:
+        return
+    if has_carried_roster:
+        result.stage_1b_start_quarter = 1
+    else:
+        result.stage_1b_start_quarter = int(start_index)
+
+
+def _supplier_set_boundary(quarter_index: int, stage_start: int, period: int) -> bool:
+    """True on the first quarter of each supplier set, counted from Stage 1b."""
+    period = max(1, int(period))
+    offset = int(quarter_index) - int(stage_start)
+    return offset >= 0 and offset % period == 0
+
+
 @dataclass
 class QuarterResult:
     quarter_index: int
@@ -95,6 +132,9 @@ class SandboxTrainingResult:
     quarters: List[QuarterResult] = field(default_factory=list)
     graduated: bool = False
     graduated_at_quarter: Optional[int] = None
+    # First Stage 1b quarter. Supplier-set boundaries are counted from here.
+    # None on a Stage 1a result and on checkpoints written before set rotation.
+    stage_1b_start_quarter: Optional[int] = None
 
     def summary(self) -> str:
         lines = ["=== Sandbox Training Summary ==="]
@@ -170,6 +210,14 @@ class SandboxTrainer:
         stage_1a_spread_iqr: Optional[Mapping[str, float]] = None,
         verbose_pipeline: bool = False,
         pipeline_logger: Optional[Callable[[str], None]] = None,
+        supplier_set_count: int = 4,
+        quarters_per_supplier_set: int = 5,
+        cost_vs_chance_median: Optional[float] = None,
+        cost_vs_chance_iqr: Optional[float] = None,
+        price_perception: bool = True,
+        price_memory_alpha: float = DEFAULT_PRICE_MEMORY_ALPHA,
+        price_bucket_z: float = DEFAULT_PRICE_BUCKET_Z,
+        price_reward_gain: float = DEFAULT_PRICE_REWARD_GAIN,
     ):
         self.agent = agent
         self.encoder = encoder
@@ -181,6 +229,15 @@ class SandboxTrainer:
             plasticity.expected_wake_interval_s = self.sleep_every_n_days * 86400.0
         self.stage_1a_baseline = dict(stage_1a_baseline or {})
         self.stage_1a_spread_iqr = dict(stage_1a_spread_iqr or {})
+        self.supplier_set_count = max(1, int(supplier_set_count))
+        self.quarters_per_supplier_set = max(1, int(quarters_per_supplier_set))
+        self.cost_vs_chance_median = cost_vs_chance_median
+        self.cost_vs_chance_iqr = cost_vs_chance_iqr
+        self.price_perception = bool(price_perception)
+        self.price_memory_alpha = float(price_memory_alpha)
+        self.price_bucket_z = float(price_bucket_z)
+        self.price_reward_gain = float(price_reward_gain)
+        self.price_memory = PriceMemory(alpha=self.price_memory_alpha)
         self.last_decision_log: List[dict] = []
         # Stage 1b supplier continuity. Kept on the trainer, not in a local, so
         # that a checkpointed run calling run_quarters(n_quarters=1) in a loop
@@ -228,6 +285,10 @@ class SandboxTrainer:
             if should_stop is not None and should_stop():
                 break
             q_idx = start_index + offset
+            if carry_suppliers:
+                _ensure_stage_1b_start(
+                    result, start_index, bool(self.carried_suppliers)
+                )
             if progress_callback:
                 progress_callback(q_idx, total)
 
@@ -254,6 +315,15 @@ class SandboxTrainer:
 
                     apply_world_overrides(world, overrides)
 
+            if carry_suppliers and _supplier_set_boundary(
+                q_idx,
+                int(result.stage_1b_start_quarter or q_idx),
+                self.quarters_per_supplier_set,
+            ):
+                # New set: drop the previous roster. This quarter's world
+                # seed (or its authored curriculum spec) supplies the next one.
+                self.carried_suppliers = None
+
             if carry_suppliers and self.carried_suppliers:
                 world.carry_supplier_state(self.carried_suppliers)
 
@@ -269,6 +339,17 @@ class SandboxTrainer:
             summary["action_counts"] = _action_counts(decision_log)
             summary["supplier_order_counts"] = dict(self._quarter_order_counts)
             summary["strategy_counts"] = dict(self._quarter_strategy_counts)
+            chance = float(
+                self.fitness_evaluator.chance_cost_efficiency(world, decision_log)
+            )
+            summary["chance_cost_efficiency"] = chance
+            summary["cost_vs_chance"] = float(fitness.cost_efficiency) - chance
+            if carry_suppliers and result.stage_1b_start_quarter is not None:
+                period = self.quarters_per_supplier_set
+                summary["supplier_set_index"] = int(
+                    (q_idx - int(result.stage_1b_start_quarter)) // period
+                )
+                summary["supplier_set_count"] = int(self.supplier_set_count)
             if curriculum_q is not None:
                 summary["curriculum_quarter"] = int(curriculum_q)
                 summary["cycle"] = int(cycle or 1)
@@ -285,7 +366,9 @@ class SandboxTrainer:
                 graduation=graduation,
                 world_summary=summary,
                 processing_time_s=time.perf_counter() - start,
-                non_regression=self._non_regression_for(fitness),
+                non_regression=self._non_regression_for(
+                    fitness, summary.get("cost_vs_chance")
+                ),
             )
             result.quarters.append(quarter_result)
 
@@ -348,12 +431,14 @@ class SandboxTrainer:
         initial_result: Optional[SandboxTrainingResult] = None,
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> SandboxTrainingResult:
-        """Stage 1b: same loop, but the suppliers survive between quarters.
+        """Stage 1b: suppliers survive inside a set, then a new set is drawn.
 
         The world is still rebuilt every quarter, so days, budget and pending
-        orders reset as before (spec 26.6.1 keeps budget per-quarter); only
-        supplier identity and history carry over, which is what makes
-        ``decision_consistency`` and ``supplier_diversification`` meaningful.
+        orders reset as before (spec 26.6.1 keeps budget per-quarter). Inside
+        a set, supplier identity and history carry over. On each set boundary
+        (every ``quarters_per_supplier_set`` quarters from the first Stage 1b
+        quarter) the carried roster is dropped and this quarter's own seed
+        draws the next set.
         """
         config = replace(
             world_config or ProcurementWorldConfig(), persistent_suppliers=True
@@ -369,15 +454,28 @@ class SandboxTrainer:
         )
 
     def _non_regression_for(
-        self, fitness: ProcurementFitnessVector
+        self,
+        fitness: ProcurementFitnessVector,
+        cost_vs_chance: Optional[float] = None,
     ) -> Optional[Dict[str, bool]]:
-        """Guard Stage 1a competence, but only where there is a baseline to guard."""
+        """Guard Stage 1a competence, but only where there is a baseline to guard.
+
+        When the baseline recorded a normalized-savings median, cost is
+        compared on ``cost_vs_chance``. Older baselines omit that median and
+        keep the raw ``cost_efficiency`` check.
+        """
         if self.fitness_evaluator.stage != "1b" or not self.stage_1a_baseline:
             return None
+        extra: Dict[str, Any] = {}
+        if self.cost_vs_chance_median is not None:
+            extra["cost_vs_chance"] = cost_vs_chance
+            extra["cost_vs_chance_median"] = self.cost_vs_chance_median
+            extra["cost_vs_chance_iqr"] = self.cost_vs_chance_iqr
         return self.fitness_evaluator.check_non_regression(
             fitness,
             self.stage_1a_baseline,
             stage_1a_spread_iqr=self.stage_1a_spread_iqr or None,
+            **extra,
         )
 
     @staticmethod
@@ -389,13 +487,15 @@ class SandboxTrainer:
 
         Without this, a caller-supplied config would replay the identical world
         every quarter (fixed seed) or an unreproducible one (seed=None).
+        A set base seed becomes ``base * 1000 + quarter``; ``None`` stays the
+        quarter index. Curriculum worlds still come from ``build_world``.
         """
         if world_config is None:
-            return ProcurementWorldConfig(seed=quarter_index)
-        base_seed = world_config.seed
-        if base_seed is None:
-            return replace(world_config, seed=quarter_index)
-        return replace(world_config, seed=int(base_seed) + quarter_index - 1)
+            return ProcurementWorldConfig(seed=quarter_world_seed(None, quarter_index))
+        return replace(
+            world_config,
+            seed=quarter_world_seed(world_config.seed, quarter_index),
+        )
 
     def _run_single_quarter(self, world: ProcurementWorld, n_days: int) -> List[dict]:
         """Run one quarter through the full NOWA decision pipeline."""
@@ -409,20 +509,31 @@ class SandboxTrainer:
                 break
 
             tick_result = world.history[-1] if world.history else {"events": []}
-            context_events = self.encoder.encode_daily_context(world, tick_result)
 
             if last_order_result is not None:
                 feedback = self._apply_order_feedback(last_order_result)
                 self._log_pipeline_feedback(feedback)
                 last_order_result = None
 
+            # Same quote book the motor will see, collected once before the
+            # decision and before world.tick().
+            stock_obs = self._prepare_stock_observation(world)
+            supplier_obs = self._prepare_supplier_observation(world, stock_obs)
+            price_refs = self.price_memory.snapshot()
+            context_events = self.encoder.encode_daily_context(
+                world,
+                tick_result,
+                supplier_obs,
+                price_refs,
+                price_perception=self.price_perception,
+                price_bucket_z=self.price_bucket_z,
+            )
+
             activation_before = self._activation_snapshot()
             action_intent = self._agent_step(context_events, dt=86400.0)
             action_type = self._intent_to_action_type(action_intent)
             activated_count = self._activated_since(activation_before)
 
-            stock_obs = self._prepare_stock_observation(world)
-            supplier_obs = self._prepare_supplier_observation(world, stock_obs)
             order_params = self.motor_adapter.resolve(
                 action_type=action_type,
                 stock_obs=stock_obs,
@@ -438,10 +549,12 @@ class SandboxTrainer:
                     order_params.product_id,
                     order_params.qty,
                 )
+                price_reference = price_refs.get(str(order_params.product_id))
                 last_order_result = {
                     "params": order_params,
                     "result": order_result,
                     "world_state": world.observe_budget_status(),
+                    "price_reference": price_reference,
                 }
                 self._store_order_experience(
                     context_events, order_params, order_result
@@ -454,6 +567,22 @@ class SandboxTrainer:
                     self._quarter_strategy_counts[action_type] = (
                         self._quarter_strategy_counts.get(action_type, 0) + 1
                     )
+
+            if self.price_perception:
+                paid = None
+                if (
+                    order_params is not None
+                    and (order_result or {}).get("status") == "accepted"
+                ):
+                    paid = (
+                        order_params.product_id,
+                        (order_result or {}).get("unit_price"),
+                    )
+                self.price_memory.observe_day(
+                    perceived_product_ids(context_events),
+                    supplier_obs,
+                    paid,
+                )
 
             decision_log.append({
                 "day": world.day,
@@ -575,7 +704,15 @@ class SandboxTrainer:
         result = dict((last_order_result or {}).get("result") or {})
         status = result.get("status", "unknown")
         if status == "accepted":
-            reward = 0.4
+            # Saved on the decision day. A missing key is an old caller with
+            # no reference, not an invitation to read today's memory.
+            reference = None
+            if (
+                isinstance(last_order_result, dict)
+                and "price_reference" in last_order_result
+            ):
+                reference = last_order_result.get("price_reference")
+            reward = self._felt_accepted_reward(result, reference)
         elif status == "rejected":
             reason = result.get("reason", "unknown")
             reward = -0.5 if reason == "insufficient_budget" else -0.3
@@ -615,7 +752,11 @@ class SandboxTrainer:
         if not callable(store_fn):
             return
         status = str((order_result or {}).get("status", "unknown"))
-        reward = 0.4 if status == "accepted" else -0.3
+        if status == "accepted":
+            reference = self.price_memory.reference(str(order_params.product_id))
+            reward = self._felt_accepted_reward(order_result, reference)
+        else:
+            reward = -0.3
         episode_tokens = list(context_events) + [
             f"supplier:{order_params.supplier_id}",
             f"product:{order_params.product_id}",
@@ -649,6 +790,31 @@ class SandboxTrainer:
                 episode=stored,
                 intensity=abs(reward),
             )
+
+    def _felt_accepted_reward(self, result: dict, reference) -> float:
+        """Shared accepted-order reward for feedback and hippocampal store."""
+        return felt_accepted_reward(
+            (result or {}).get("unit_price"),
+            reference,
+            gain=self.price_reward_gain,
+            enabled=self.price_perception,
+        )
+
+    def checkpoint_metadata(self) -> Dict[str, Any]:
+        """Trainer state carried beside the agent checkpoint."""
+        return {
+            "carried_suppliers": self.carried_suppliers,
+            "price_memory": self.price_memory.to_dict(),
+        }
+
+    def restore_checkpoint_metadata(self, metadata: Optional[Mapping[str, Any]]) -> None:
+        """Restore trainer state. A checkpoint without price memory stays empty."""
+        meta = dict(metadata or {})
+        self.carried_suppliers = meta.get("carried_suppliers")
+        self.price_memory = PriceMemory.from_dict(
+            meta.get("price_memory"),
+            alpha=self.price_memory_alpha,
+        )
 
     @staticmethod
     def _prepare_stock_observation(world: ProcurementWorld) -> Dict[str, dict]:

@@ -705,9 +705,28 @@ class SandboxLabApp(tk.Tk if tk is not None else object):
         try:
             resolved = path if Path(path).is_absolute() else str(DEMO_ROOT / path)
             bundle = load_baseline_bundle(resolved)
+            delta = None
+            try:
+                cfg_path = self.config_var.get().strip()
+                if cfg_path:
+                    from nowa_sandbox.sandbox_config import SandboxConfig
+
+                    resolved_cfg = (
+                        cfg_path
+                        if Path(cfg_path).is_absolute()
+                        else str(DEMO_ROOT / cfg_path)
+                    )
+                    delta = SandboxConfig.from_yaml(
+                        resolved_cfg
+                    ).stage_baseline.cost_vs_chance_floor_delta
+            except Exception:
+                delta = None
             self._nr_floors = nr_floors_from_baseline(
                 bundle.get("stage_1a_baseline") or {},
                 bundle.get("stage_1a_spread_iqr") or {},
+                cost_vs_chance_median=bundle.get("cost_vs_chance_median"),
+                cost_vs_chance_iqr=bundle.get("cost_vs_chance_iqr"),
+                cost_vs_chance_floor_delta=delta,
             )
         except Exception:
             self._nr_floors = dict(self.controller.last_nr_floors or {})

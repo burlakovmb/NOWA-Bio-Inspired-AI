@@ -1,11 +1,25 @@
 """Tests for Stage 1b persistent suppliers (spec sections 26.6, 26.8)."""
 
+import json
+
 import pytest
 
-from nowa_sandbox.procurement_fitness import ProcurementFitnessEvaluator
-from nowa_sandbox.procurement_world import ProcurementWorld, ProcurementWorldConfig
+from nowa_sandbox.procurement_fitness import (
+    ProcurementFitnessEvaluator,
+    ProcurementFitnessVector,
+)
+from nowa_sandbox.procurement_world import (
+    ProcurementWorld,
+    ProcurementWorldConfig,
+    VirtualSupplier,
+)
+from nowa_sandbox.sandbox_checkpoint import load_checkpoint, save_checkpoint
 from nowa_sandbox.sandbox_encoder import SandboxEncoder
-from nowa_sandbox.training_loop import SandboxTrainer
+from nowa_sandbox.training_loop import (
+    QuarterResult,
+    SandboxTrainer,
+    SandboxTrainingResult,
+)
 
 
 SUPPLIER_ATTRIBUTES = (
@@ -336,3 +350,200 @@ class TestSustainedGraduation:
 
     def test_clean_summary_has_no_regression_marker(self):
         assert "REGRESSED" not in self._result([True]).summary()
+
+
+def _price_map(suppliers):
+    return {
+        sid: supplier.base_price_multiplier
+        for sid, supplier in (suppliers or {}).items()
+    }
+
+
+def _short_config():
+    return ProcurementWorldConfig(
+        initial_budget=50_000.0,
+        n_products=1,
+        n_suppliers=3,
+        days_per_quarter=3,
+        seed=5,
+        supplier_default_probability=0.0,
+    )
+
+
+def _prior_stage_1a(n_quarters):
+    fitness = ProcurementFitnessVector(
+        cost_efficiency=0.5,
+        stockout_avoidance=0.5,
+        budget_discipline=1.0,
+        supplier_diversification=0.0,
+        decision_consistency=0.0,
+        reaction_to_risk_events=0.5,
+        n_days=1,
+        n_orders=0,
+    )
+    quarters = [
+        QuarterResult(
+            quarter_index=i,
+            fitness=fitness,
+            graduation={"all_passed": False, "stage": "1a"},
+            world_summary={},
+            processing_time_s=0.0,
+        )
+        for i in range(1, n_quarters + 1)
+    ]
+    return SandboxTrainingResult(quarters=quarters)
+
+
+class TestSupplierSetRotation:
+
+    def _trainer(self):
+        return SandboxTrainer(
+            _RecordingAgent(),
+            SandboxEncoder(),
+            ProcurementFitnessEvaluator(stage="1b"),
+            sleep_every_n_days=5,
+            quarters_per_supplier_set=5,
+            supplier_set_count=4,
+        )
+
+    def test_set_changes_every_five_quarters_and_survives_resume(self):
+        trainer = self._trainer()
+        config = _short_config()
+        result = trainer.run_stage1b_persistent(
+            n_quarters=4, world_config=config, stop_on_graduation=False,
+        )
+        assert result.stage_1b_start_quarter == 1
+        roster = _price_map(trainer.carried_suppliers)
+        assert result.quarters[-1].world_summary["supplier_set_index"] == 0
+
+        resumed = self._trainer()
+        resumed.carried_suppliers = trainer.carried_suppliers
+        result = resumed.run_stage1b_persistent(
+            n_quarters=1,
+            world_config=config,
+            stop_on_graduation=False,
+            initial_result=result,
+        )
+        assert result.quarters[-1].quarter_index == 5
+        assert _price_map(resumed.carried_suppliers) == roster
+        assert result.quarters[-1].world_summary["supplier_set_index"] == 0
+
+        result = resumed.run_stage1b_persistent(
+            n_quarters=1,
+            world_config=config,
+            stop_on_graduation=False,
+            initial_result=result,
+        )
+        fresh = ProcurementWorld(resumed._config_for_quarter(config, 6))
+        assert result.quarters[-1].quarter_index == 6
+        assert result.quarters[-1].world_summary["supplier_set_index"] == 1
+        assert _price_map(resumed.carried_suppliers) == _price_map(fresh.suppliers)
+        assert _price_map(resumed.carried_suppliers) != roster
+
+        held = _price_map(resumed.carried_suppliers)
+        result = resumed.run_stage1b_persistent(
+            n_quarters=1,
+            world_config=config,
+            stop_on_graduation=False,
+            initial_result=result,
+        )
+        assert result.quarters[-1].quarter_index == 7
+        assert _price_map(resumed.carried_suppliers) == held
+
+    def test_boundaries_count_from_quarter_31_after_stage_1a(self):
+        trainer = self._trainer()
+        config = _short_config()
+        result = trainer.run_stage1b_persistent(
+            n_quarters=5,
+            world_config=config,
+            stop_on_graduation=False,
+            initial_result=_prior_stage_1a(30),
+        )
+        assert result.stage_1b_start_quarter == 31
+        assert [q.quarter_index for q in result.quarters[-5:]] == [31, 32, 33, 34, 35]
+        assert all(
+            q.world_summary["supplier_set_index"] == 0 for q in result.quarters[-5:]
+        )
+        roster = _price_map(trainer.carried_suppliers)
+        first = ProcurementWorld(trainer._config_for_quarter(config, 31))
+        assert roster == _price_map(first.suppliers)
+
+        result = trainer.run_stage1b_persistent(
+            n_quarters=1,
+            world_config=config,
+            stop_on_graduation=False,
+            initial_result=result,
+        )
+        assert result.quarters[-1].quarter_index == 36
+        assert result.quarters[-1].world_summary["supplier_set_index"] == 1
+        nxt = ProcurementWorld(trainer._config_for_quarter(config, 36))
+        assert _price_map(trainer.carried_suppliers) == _price_map(nxt.suppliers)
+        assert _price_map(trainer.carried_suppliers) != roster
+
+
+def _strip_key(obj, key):
+    if isinstance(obj, dict):
+        obj.pop(key, None)
+        for value in obj.values():
+            _strip_key(value, key)
+    elif isinstance(obj, list):
+        for value in obj:
+            _strip_key(value, key)
+
+
+class TestOldCheckpointAndBaselineLoad:
+
+    def test_old_checkpoint_without_set_marker_still_restores_suppliers(self, tmp_path):
+        supplier = VirtualSupplier(
+            supplier_id="supplier_000",
+            reliability=0.91,
+            base_price_multiplier=0.88,
+            price_volatility=0.04,
+            lead_time_days=4,
+            reputation=0.55,
+            total_orders=3,
+            successful_orders=2,
+        )
+        fitness = ProcurementFitnessVector(
+            cost_efficiency=0.5,
+            stockout_avoidance=0.5,
+            budget_discipline=1.0,
+            supplier_diversification=0.2,
+            decision_consistency=0.2,
+            reaction_to_risk_events=0.5,
+            n_days=3,
+            n_orders=1,
+        )
+        result = SandboxTrainingResult(
+            quarters=[QuarterResult(
+                quarter_index=32,
+                fitness=fitness,
+                graduation={"all_passed": False, "stage": "1b"},
+                world_summary={"day": 3},
+                processing_time_s=0.1,
+            )],
+            stage_1b_start_quarter=31,
+        )
+        path = save_checkpoint(
+            tmp_path / "new.ckpt",
+            _RecordingAgent(),
+            result,
+            metadata={"carried_suppliers": {"supplier_000": supplier}},
+        )
+        loaded = load_checkpoint(path)
+        assert loaded.result.stage_1b_start_quarter == 31
+        restored = loaded.metadata["carried_suppliers"]["supplier_000"]
+        assert restored.base_price_multiplier == pytest.approx(0.88)
+        assert restored.total_orders == 3
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        _strip_key(raw, "stage_1b_start_quarter")
+        old_path = tmp_path / "old.ckpt"
+        old_path.write_text(json.dumps(raw), encoding="utf-8")
+        old = load_checkpoint(old_path)
+        assert old.result.stage_1b_start_quarter is None
+        assert (
+            old.metadata["carried_suppliers"]["supplier_000"].base_price_multiplier
+            == pytest.approx(0.88)
+        )
+        assert "chance_cost_efficiency" not in old.result.quarters[0].world_summary

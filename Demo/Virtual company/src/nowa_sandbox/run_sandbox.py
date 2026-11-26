@@ -55,6 +55,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--suppliers", type=int, default=None)
     parser.add_argument("--sleep-every", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--supplier-sets",
+        type=int,
+        default=None,
+        help="Stage 1b: how many supplier sets to plan (default 4). "
+             "Each set is drawn from that quarter's world seed.",
+    )
+    parser.add_argument(
+        "--quarters-per-supplier-set",
+        type=int,
+        default=None,
+        help="Stage 1b: quarters a supplier set stays before the next draw "
+             "(default 5), counted from the first Stage 1b quarter.",
+    )
     parser.add_argument("--output", default="results/sandbox_run.json")
     parser.add_argument(
         "--checkpoint",
@@ -75,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-seed-intuition",
         action="store_true",
         help="start with an empty hippocampus instead of seeded business episodes",
+    )
+    parser.add_argument(
+        "--no-price-perception",
+        action="store_true",
+        help="omit price tokens and keep the flat 0.4 reward for an accepted order",
     )
     parser.add_argument(
         "--verbose-pipeline",
@@ -174,8 +193,16 @@ def resolve_config(args: argparse.Namespace) -> SandboxConfig:
         config.training.stop_on_graduation = False
     if args.no_seed_intuition:
         config.training.seed_intuition = False
+    if getattr(args, "no_price_perception", False):
+        config.training.price_perception = False
     if args.stage is not None:
         config.training.stage = args.stage
+    if getattr(args, "supplier_sets", None) is not None:
+        config.training.supplier_set_count = max(1, int(args.supplier_sets))
+    if getattr(args, "quarters_per_supplier_set", None) is not None:
+        config.training.quarters_per_supplier_set = max(
+            1, int(args.quarters_per_supplier_set)
+        )
     return config
 
 
@@ -235,6 +262,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     fitness_evaluator = ProcurementFitnessEvaluator(
         thresholds=config.graduation_thresholds,
         stage=config.training.stage,
+        cost_vs_chance_floor_delta=config.stage_baseline.cost_vs_chance_floor_delta,
     )
     log(f"[Init] Curriculum stage {config.training.stage} "
         f"(gating on {', '.join(fitness_evaluator.gating_criteria)})")
@@ -249,11 +277,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         stage_1a_spread_iqr=baseline_bundle.get("stage_1a_spread_iqr") or {},
         verbose_pipeline=args.verbose_pipeline,
         pipeline_logger=log,
+        supplier_set_count=config.training.supplier_set_count,
+        quarters_per_supplier_set=config.training.quarters_per_supplier_set,
+        cost_vs_chance_median=baseline_bundle.get("cost_vs_chance_median"),
+        cost_vs_chance_iqr=baseline_bundle.get("cost_vs_chance_iqr"),
+        price_perception=config.training.price_perception,
+        price_memory_alpha=config.training.price_memory_alpha,
+        price_bucket_z=config.training.price_bucket_z,
+        price_reward_gain=config.training.price_reward_gain,
     )
     if checkpoint is not None:
-        trainer.carried_suppliers = (checkpoint.metadata or {}).get(
-            "carried_suppliers"
-        )
+        trainer.restore_checkpoint_metadata(checkpoint.metadata)
 
     def progress(q: int, total: int) -> None:
         log(f"[Training] Quarter {q}/{total}...")
@@ -330,7 +364,7 @@ def _run_training(
         # across a resume; without it Stage 1b would quietly become Stage 1a.
         save_checkpoint(
             checkpoint_path, agent, result, rng=rng,
-            metadata={"carried_suppliers": trainer.carried_suppliers},
+            metadata=trainer.checkpoint_metadata(),
         )
         if len(result.quarters) == quarters_before:
             break

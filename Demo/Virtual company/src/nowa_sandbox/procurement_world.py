@@ -188,6 +188,19 @@ class ProcurementWorldConfig:
         )
 
 
+def quarter_world_seed(base_seed: Optional[int], quarter_index: int) -> int:
+    """Seed of one RNG quarter.
+
+    ``base_seed is None`` keeps the historical quarter-index seed.
+    A set base seed uses ``base_seed * 1000 + quarter`` (1-based), so
+    seed 2 quarter 30 is not the same world as seed 1 quarter 31.
+    """
+    quarter = int(quarter_index)
+    if base_seed is None:
+        return quarter
+    return int(base_seed) * 1000 + quarter
+
+
 class ProcurementWorld:
     """Simulated procurement market.
 

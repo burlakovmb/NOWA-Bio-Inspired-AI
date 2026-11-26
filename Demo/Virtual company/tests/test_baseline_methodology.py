@@ -190,3 +190,196 @@ class TestStage1bReinterpretedWithNewFloor:
         assert without_high["stockout_avoidance"] is False
         assert without["budget_discipline"] is True
         assert abs(NON_REGRESSION_FLOOR - 0.9) < 1e-9
+
+
+class TestNormalizedSavingsBaseline:
+
+    def test_normalized_floor_is_at_least_delta(self):
+        from nowa_sandbox.stage_baseline import COST_VS_CHANCE_FLOOR_DELTA
+
+        statistical = non_regression_floor(0.0, 0.2, clip_at_zero=False)
+        guarded = non_regression_floor(
+            0.0, 0.2, lower_bound=COST_VS_CHANCE_FLOOR_DELTA
+        )
+        assert statistical == pytest.approx(-0.2)
+        assert guarded == pytest.approx(COST_VS_CHANCE_FLOOR_DELTA)
+
+    def test_floor_unchanged_when_both_terms_exceed_delta(self):
+        median, iqr, delta = 0.40, 0.05, 0.03
+        strict = 0.9 * median
+        volatility = median - iqr
+        assert strict > delta and volatility > delta
+        assert non_regression_floor(median, iqr, lower_bound=delta) == pytest.approx(
+            min(strict, volatility)
+        )
+
+    def test_median_baseline_stores_cost_vs_chance_when_present(self):
+        values = [0.02 * (i - 7) for i in range(15)]
+        quarters = []
+        for i, value in enumerate(values, start=1):
+            quarters.append({
+                "quarter_index": i,
+                "fitness": {
+                    "cost_efficiency": 0.6,
+                    "stockout_avoidance": 0.9,
+                    "budget_discipline": 1.0,
+                    "reaction_to_risk_events": 0.6,
+                },
+                "graduation": {"all_passed": True},
+                "world_summary": {"cost_vs_chance": value},
+            })
+        payload = compute_stage_1a_baseline(quarters)
+        assert payload["cost_vs_chance_median"] == pytest.approx(
+            round(statistics.median(values), 4)
+        )
+        assert "cost_vs_chance_iqr" in payload
+        assert set(payload["stage_1a_baseline"]) == {
+            "cost_efficiency",
+            "stockout_avoidance",
+            "budget_discipline",
+            "reaction_to_risk_events",
+        }
+
+    def test_quarters_without_cost_vs_chance_omit_the_normalized_keys(self):
+        payload = compute_stage_1a_baseline(
+            _fake_quarters(SEED1_STOCKOUT_AVOIDANCE)
+        )
+        assert "cost_vs_chance_median" not in payload
+        assert "cost_vs_chance_iqr" not in payload
+
+    def test_old_baseline_file_loads_and_keeps_the_raw_cost_guard(self, tmp_path):
+        import json
+
+        from nowa_sandbox.stage_baseline import load_baseline_bundle
+
+        path = tmp_path / "old_baseline.json"
+        path.write_text(json.dumps({
+            "stage_1a_baseline": {
+                "cost_efficiency": 0.8,
+                "stockout_avoidance": 0.9,
+                "budget_discipline": 1.0,
+                "reaction_to_risk_events": 0.8,
+            },
+            "stage_1a_spread_iqr": {
+                "cost_efficiency": 0.0,
+                "stockout_avoidance": 0.0,
+                "budget_discipline": 0.0,
+                "reaction_to_risk_events": 0.0,
+            },
+            "method": "median_all",
+        }), encoding="utf-8")
+        bundle = load_baseline_bundle(str(path))
+        assert "cost_vs_chance_median" not in bundle
+        evaluator = ProcurementFitnessEvaluator(stage="1b")
+        vector = ProcurementFitnessVector(
+            cost_efficiency=0.5,
+            stockout_avoidance=0.9,
+            budget_discipline=1.0,
+            supplier_diversification=0.5,
+            decision_consistency=0.5,
+            reaction_to_risk_events=0.8,
+            n_days=1,
+            n_orders=1,
+        )
+        guard = evaluator.check_non_regression(
+            vector,
+            bundle["stage_1a_baseline"],
+            stage_1a_spread_iqr=bundle["stage_1a_spread_iqr"],
+        )
+        # 0.5 is below 0.8 * 0.9. No normalized median, so the raw check stands.
+        assert guard["cost_efficiency"] is False
+
+
+class TestChanceCostEfficiency:
+    """Analytical chance level on a world with known price multipliers."""
+
+    def test_chance_matches_the_mean_supplier_score(self):
+        from nowa_sandbox.procurement_world import ProcurementWorld, ProcurementWorldConfig
+
+        world = ProcurementWorld(ProcurementWorldConfig(
+            n_products=1,
+            n_suppliers=3,
+            days_per_quarter=1,
+            seed=1,
+            supplier_default_probability=0.0,
+        ))
+        ordered = sorted(world.suppliers)
+        for sid, multiplier in zip(ordered, (0.85, 1.00, 1.15)):
+            world.suppliers[sid].base_price_multiplier = multiplier
+        product = next(iter(world.products))
+        evaluator = ProcurementFitnessEvaluator(stage="1a")
+
+        def entry(sid):
+            return {
+                "supplier_id": sid,
+                "product_id": product,
+                "result": {"status": "accepted"},
+            }
+
+        # Scores of 0.85 / 1.00 / 1.15 on [0.85, 1.15] are 1, 0.5, 0.
+        # Uniform chance is their mean, 0.5, for every accepted order.
+        cheap = evaluator._cost_efficiency(world, [entry(ordered[0])])
+        chance = evaluator.chance_cost_efficiency(world, [entry(ordered[0])])
+        assert cheap == pytest.approx(1.0)
+        assert chance == pytest.approx(0.5)
+        assert cheap - chance > 0
+
+        expensive = evaluator._cost_efficiency(world, [entry(ordered[2])])
+        chance_expensive = evaluator.chance_cost_efficiency(
+            world, [entry(ordered[2])]
+        )
+        assert expensive == pytest.approx(0.0)
+        assert chance_expensive == pytest.approx(0.5)
+        assert expensive - chance_expensive < 0
+
+        assert evaluator.chance_cost_efficiency(world, []) == pytest.approx(0.5)
+        assert evaluator._cost_efficiency(world, []) == pytest.approx(0.5)
+
+    def test_offer_world_chance_is_the_mean_offer_score(self):
+        from nowa_sandbox.procurement_world import ProcurementWorld
+
+        spec = {
+            "budget": 1000.0,
+            "products": [{
+                "product_id": "A",
+                "base_demand_per_day": 1.0,
+                "demand_volatility": 0.0,
+                "holding_cost_per_unit": 1.0,
+                "stockout_penalty_per_unit": 1.0,
+                "current_stock": 10.0,
+                "reorder_point": 1.0,
+            }],
+            "suppliers": [
+                {"supplier_id": "cheap", "reputation": 0.5},
+                {"supplier_id": "mid", "reputation": 0.5},
+                {"supplier_id": "dear", "reputation": 0.5},
+            ],
+            "offers": [
+                {"product_id": "A", "supplier_id": "cheap", "unit_price": 10.0,
+                 "lead_time_days": 3, "reliability": 0.9, "price_volatility": 0.0},
+                {"product_id": "A", "supplier_id": "mid", "unit_price": 20.0,
+                 "lead_time_days": 3, "reliability": 0.9, "price_volatility": 0.0},
+                {"product_id": "A", "supplier_id": "dear", "unit_price": 40.0,
+                 "lead_time_days": 3, "reliability": 0.9, "price_volatility": 0.0},
+            ],
+        }
+        world = ProcurementWorld.from_quarter_spec(spec, days_per_quarter=1, seed=1)
+        evaluator = ProcurementFitnessEvaluator(stage="1a")
+
+        def entry(sid, price):
+            return {
+                "supplier_id": sid,
+                "product_id": "A",
+                "result": {"status": "accepted", "unit_price": price},
+            }
+
+        # (1 + 2/3 + 0) / 3 = 5/9.
+        expected = (1.0 + (2.0 / 3.0) + 0.0) / 3.0
+        cheap = evaluator._cost_efficiency(world, [entry("cheap", 10.0)])
+        chance = evaluator.chance_cost_efficiency(world, [entry("cheap", 10.0)])
+        assert chance == pytest.approx(expected)
+        assert cheap - chance > 0
+        dear = evaluator._cost_efficiency(world, [entry("dear", 40.0)])
+        chance_dear = evaluator.chance_cost_efficiency(world, [entry("dear", 40.0)])
+        assert chance_dear == pytest.approx(expected)
+        assert dear - chance_dear < 0

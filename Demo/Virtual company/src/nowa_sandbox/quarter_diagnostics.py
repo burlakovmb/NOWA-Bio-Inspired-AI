@@ -12,7 +12,11 @@ from nowa_sandbox.procurement_fitness import (
     STAGE_1A_CRITERIA,
     STAGE_CRITERIA,
 )
-from nowa_sandbox.stage_baseline import non_regression_floor
+from nowa_sandbox.stage_baseline import (
+    COST_VS_CHANCE_FLOOR_DELTA,
+    clamp_cost_vs_chance_floor_delta,
+    non_regression_floor,
+)
 
 
 # Exact score when all accepted orders go to one supplier:
@@ -80,12 +84,33 @@ def is_single_supplier_monopoly(diversification: float) -> bool:
 def nr_floors_from_baseline(
     baseline: Optional[Mapping[str, float]] = None,
     spread_iqr: Optional[Mapping[str, float]] = None,
+    cost_vs_chance_median: Optional[float] = None,
+    cost_vs_chance_iqr: Optional[float] = None,
+    cost_vs_chance_floor_delta: Optional[float] = None,
 ) -> Dict[str, float]:
-    """Effective Stage 1a non-regression floors (empty if no baseline)."""
+    """Effective Stage 1a non-regression floors (empty if no baseline).
+
+    When a normalized-savings median is present, the ``cost_efficiency``
+    floor is ``max(min(0.9*median, median-IQR), δ)``. The displayed key
+    stays ``cost_efficiency`` so the six-criterion guard keeps its names.
+    """
     baseline = dict(baseline or {})
     spread = dict(spread_iqr or {})
     floors: Dict[str, float] = {}
+    delta = clamp_cost_vs_chance_floor_delta(
+        COST_VS_CHANCE_FLOOR_DELTA
+        if cost_vs_chance_floor_delta is None
+        else cost_vs_chance_floor_delta
+    )
     for criterion in STAGE_1A_CRITERIA:
+        if criterion == "cost_efficiency" and cost_vs_chance_median is not None:
+            floors[criterion] = non_regression_floor(
+                float(cost_vs_chance_median),
+                float(0.0 if cost_vs_chance_iqr is None else cost_vs_chance_iqr),
+                base_multiplier=NON_REGRESSION_FLOOR,
+                lower_bound=delta,
+            )
+            continue
         if criterion not in baseline:
             continue
         median = float(baseline[criterion])

@@ -28,8 +28,14 @@ def strict_learning(monkeypatch):
         pytest.fail("WakingLearningError was raised and caught: " + " | ".join(raised))
 
 
-def _trainer(agent, encoder, fitness_evaluator, *, sleep_days=3):
-    return SandboxTrainer(agent, encoder, fitness_evaluator, sleep_every_n_days=sleep_days)
+def _trainer(agent, encoder, fitness_evaluator, *, sleep_days=3, **kwargs):
+    return SandboxTrainer(
+        agent,
+        encoder,
+        fitness_evaluator,
+        sleep_every_n_days=sleep_days,
+        **kwargs,
+    )
 
 
 def test_core_step_uses_one_simulated_day_without_wall_fallback(
@@ -86,14 +92,27 @@ def test_core_sleep_consolidates_known_waking_outcome(
     )
 
 
+@pytest.mark.parametrize("price_perception", [False, True])
 def test_real_order_known_reward_enters_labile_then_sleep_consolidates(
-    sandbox_agent, encoder, fitness_evaluator
+    sandbox_agent, encoder, fitness_evaluator, price_perception
 ):
     from learning_guard import labile_snapshot, stable_fingerprint
+    from nowa_sandbox.price_memory import PriceMemory
     from nowa_sandbox.procurement_motor_adapter import OrderParams
 
     agent = sandbox_agent
-    trainer = _trainer(agent, encoder, fitness_evaluator)
+    gain = 0.3
+    trainer = _trainer(
+        agent,
+        encoder,
+        fitness_evaluator,
+        price_perception=price_perception,
+        price_reward_gain=gain,
+    )
+    trainer.price_memory = PriceMemory.from_dict(
+        {"skus": {"product_000": {"ema": 10.0, "spread": 1.0}}},
+        alpha=0.1,
+    )
     before = stable_fingerprint(agent)
     context = ["event:stock_critical_low", "product:product_000"]
     params = OrderParams(
@@ -103,10 +122,15 @@ def test_real_order_known_reward_enters_labile_then_sleep_consolidates(
         strategy="urgent_reorder",
         confidence=0.9,
     )
-    trainer._store_order_experience(context, params, {"status": "accepted"})
+    trainer._store_order_experience(
+        context, params, {"status": "accepted", "unit_price": 8.0}
+    )
     episode = agent.hippocampus.experiences[-1]
     assert episode.td_outcome_committed is True
-    assert episode.td_committed_reward == pytest.approx(0.4)
+    if price_perception:
+        assert 0.4 - gain - 1e-9 <= episode.td_committed_reward <= 0.4 + gain + 1e-9
+    else:
+        assert episode.td_committed_reward == pytest.approx(0.4)
     assert episode.replay_action_id == "urgent_reorder"
     assert episode.context_events == context
     assert labile_snapshot(agent)

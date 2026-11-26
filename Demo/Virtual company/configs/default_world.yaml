@@ -11,7 +11,8 @@ world:
   demand_shock_probability: 0.05
   supplier_default_probability: 0.003
   late_delivery_probability_base: 0.05
-  # seed: base seed for quarter 1; each later quarter uses seed + (quarter - 1)
+  # seed: base seed. Each RNG quarter uses seed * 1000 + quarter
+  # (quarter is 1-based). A null seed keeps the quarter index itself.
   seed: 42
   # Q3b difficulty bounding (spec v1.3) — caps structurally impossible quarters
   max_lead_time_days: 10
@@ -36,6 +37,18 @@ training:
   # suppliers across quarters and gates on the two relationship criteria.
   # Run 1b only after 1a has graduated, and pass --baseline-from.
   stage: "1a"
+  # Stage 1b supplier sets. Inside a set the roster is carried; on the
+  # boundary (counted from the first 1b quarter) it is dropped and the
+  # quarter's own world seed draws the next set. Defaults: 4 sets × 5 quarters.
+  supplier_set_count: 4
+  quarters_per_supplier_set: 5
+  # Coarse price band (cheap/average/expensive) from quotes the agent can
+  # see, plus a felt-cost term on an accepted order. Off restores the flat
+  # 0.4 reward and omits price tokens (same seeds, previous behaviour).
+  price_perception: true
+  price_memory_alpha: 0.1
+  price_bucket_z: 0.5
+  price_reward_gain: 0.3
 
 # All six criteria are always measured and reported. Which of them gate
 # graduation depends on training.stage; the rest are monitored and guarded
@@ -49,6 +62,13 @@ graduation_thresholds:
   # Stage 1b gating criteria
   supplier_diversification: 0.40
   decision_consistency: 0.60
+
+# Stage 1a baseline parameters for the Stage 1b non-regression guard.
+stage_baseline:
+  # Lower bound of the normalized cost floor (cost_vs_chance). A degenerate
+  # or near-zero Stage 1a baseline must not let a random policy pass the
+  # guard. Allowed range: 0.02–0.05.
+  cost_vs_chance_floor_delta: 0.03
 
 output:
   results_dir: "results/"

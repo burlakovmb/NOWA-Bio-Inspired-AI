@@ -141,7 +141,7 @@ class TestQuarterIsolation:
         seeds = [
             trainer._config_for_quarter(_config(seed=1), q).seed for q in range(1, 5)
         ]
-        assert seeds == [1, 2, 3, 4]
+        assert seeds == [1001, 1002, 1003, 1004]
 
     def test_seedless_config_falls_back_to_quarter_index(
         self, sandbox_agent, encoder, fitness_evaluator
@@ -149,6 +149,43 @@ class TestQuarterIsolation:
         trainer = SandboxTrainer(sandbox_agent, encoder, fitness_evaluator)
         assert trainer._config_for_quarter(_config(seed=None), 3).seed == 3
         assert trainer._config_for_quarter(None, 4).seed == 4
+
+    def test_seeds_1_through_5_do_not_share_a_world_in_quarters_1_through_60(
+        self, sandbox_agent, encoder, fitness_evaluator
+    ):
+        """seed * 1000 + quarter: no shared world across seeds 1..5, quarters 1..60.
+
+        The old ``base + quarter - 1`` formula made seed 2 quarter 30 the
+        same world as seed 1 quarter 31.
+        """
+        trainer = SandboxTrainer(sandbox_agent, encoder, fitness_evaluator)
+        seen = {}
+        for seed in range(1, 6):
+            for quarter in range(1, 61):
+                cfg = trainer._config_for_quarter(
+                    _config(seed=seed, n_products=2, n_suppliers=3, days_per_quarter=1),
+                    quarter,
+                )
+                world = ProcurementWorld(cfg)
+                fingerprint = (
+                    tuple(
+                        round(product.base_demand_per_day, 6)
+                        for product in world.products.values()
+                    ),
+                    tuple(
+                        round(supplier.base_price_multiplier, 6)
+                        for supplier in world.suppliers.values()
+                    ),
+                )
+                seen[(seed, quarter)] = (cfg.seed, fingerprint)
+
+        world_seeds = [seen[(seed, quarter)][0] for seed in range(1, 6) for quarter in range(1, 61)]
+        assert len(world_seeds) == len(set(world_seeds))
+        for quarter in range(1, 61):
+            fingerprints = [seen[(seed, quarter)][1] for seed in range(1, 6)]
+            assert len(set(fingerprints)) == 5
+        assert seen[(2, 30)][0] != seen[(1, 31)][0]
+        assert seen[(2, 30)][1] != seen[(1, 31)][1]
 
     def test_quarters_produce_different_worlds(
         self, sandbox_agent, encoder, fitness_evaluator
