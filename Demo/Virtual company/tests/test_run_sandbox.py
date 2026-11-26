@@ -58,6 +58,14 @@ class TestArgumentResolution:
         args = run_sandbox.build_parser().parse_args(["--no-seed-intuition"])
         assert run_sandbox.resolve_config(args).training.seed_intuition is False
 
+    def test_no_price_perception_flag(self):
+        args = run_sandbox.build_parser().parse_args(["--no-price-perception"])
+        assert run_sandbox.resolve_config(args).training.price_perception is False
+
+    def test_price_perception_stays_on_without_the_flag(self):
+        args = run_sandbox.build_parser().parse_args([])
+        assert run_sandbox.resolve_config(args).training.price_perception is True
+
     def test_verbose_pipeline_flag(self):
         args = run_sandbox.build_parser().parse_args(["--verbose-pipeline"])
         assert args.verbose_pipeline is True

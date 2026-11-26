@@ -12,6 +12,11 @@ from typing import Any, Dict, Mapping, Optional
 
 from ._common import clamp, safe_float, safe_int
 from .procurement_fitness import GRADUATION_THRESHOLDS, STAGE_CRITERIA
+from .price_memory import (
+    DEFAULT_PRICE_BUCKET_Z,
+    DEFAULT_PRICE_MEMORY_ALPHA,
+    DEFAULT_PRICE_REWARD_GAIN,
+)
 from .procurement_world import ProcurementWorldConfig
 from .stage_baseline import (
     COST_VS_CHANCE_FLOOR_DELTA,
@@ -28,6 +33,33 @@ def _valid_stage(value: Any) -> str:
     return stage if stage in STAGE_CRITERIA else "1a"
 
 
+def _price_memory_alpha(value: Any, default: float) -> float:
+    number = safe_float(value, default)
+    if not 0.0 < number <= 1.0:
+        raise ValueError(
+            f"training.price_memory_alpha must be in (0, 1], got {value!r}"
+        )
+    return number
+
+
+def _price_bucket_z(value: Any, default: float) -> float:
+    number = safe_float(value, default)
+    if not number > 0.0:
+        raise ValueError(
+            f"training.price_bucket_z must be > 0, got {value!r}"
+        )
+    return number
+
+
+def _price_reward_gain(value: Any, default: float) -> float:
+    number = safe_float(value, default)
+    if not 0.0 <= number <= 0.4:
+        raise ValueError(
+            f"training.price_reward_gain must be in [0, 0.4], got {value!r}"
+        )
+    return number
+
+
 @dataclass
 class TrainingConfig:
     n_quarters: int = 30
@@ -41,6 +73,12 @@ class TrainingConfig:
     # quarters counted from the first Stage 1b quarter.
     supplier_set_count: int = 4
     quarters_per_supplier_set: int = 5
+    # Coarse price band in context, and felt cost on an accepted order.
+    # Off keeps the previous tokens and the flat 0.4 reward.
+    price_perception: bool = True
+    price_memory_alpha: float = DEFAULT_PRICE_MEMORY_ALPHA
+    price_bucket_z: float = DEFAULT_PRICE_BUCKET_Z
+    price_reward_gain: float = DEFAULT_PRICE_REWARD_GAIN
 
 
 @dataclass
@@ -160,6 +198,27 @@ class SandboxConfig:
                 defaults_training.quarters_per_supplier_set,
                 minimum=1,
             ),
+            price_perception=bool(
+                training.get(
+                    "price_perception", defaults_training.price_perception
+                )
+            ),
+            price_memory_alpha=_price_memory_alpha(
+                training.get(
+                    "price_memory_alpha", defaults_training.price_memory_alpha
+                ),
+                defaults_training.price_memory_alpha,
+            ),
+            price_bucket_z=_price_bucket_z(
+                training.get("price_bucket_z", defaults_training.price_bucket_z),
+                defaults_training.price_bucket_z,
+            ),
+            price_reward_gain=_price_reward_gain(
+                training.get(
+                    "price_reward_gain", defaults_training.price_reward_gain
+                ),
+                defaults_training.price_reward_gain,
+            ),
         )
 
         thresholds = dict(GRADUATION_THRESHOLDS)
@@ -240,6 +299,10 @@ class SandboxConfig:
                 "stage": self.training.stage,
                 "supplier_set_count": self.training.supplier_set_count,
                 "quarters_per_supplier_set": self.training.quarters_per_supplier_set,
+                "price_perception": self.training.price_perception,
+                "price_memory_alpha": self.training.price_memory_alpha,
+                "price_bucket_z": self.training.price_bucket_z,
+                "price_reward_gain": self.training.price_reward_gain,
             },
             "graduation_thresholds": dict(self.graduation_thresholds),
             "stage_baseline": {

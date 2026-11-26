@@ -8,6 +8,14 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from ._common import ensure_core_src_on_path
+from .price_memory import (
+    DEFAULT_PRICE_BUCKET_Z,
+    DEFAULT_PRICE_MEMORY_ALPHA,
+    DEFAULT_PRICE_REWARD_GAIN,
+    PriceMemory,
+    felt_accepted_reward,
+    perceived_product_ids,
+)
 from .procurement_fitness import ProcurementFitnessEvaluator, ProcurementFitnessVector
 from .procurement_hippocampus_seeder import ProcurementHippocampusSeeder
 from .procurement_motor_adapter import OrderParams, ProcurementMotorAdapter
@@ -206,6 +214,10 @@ class SandboxTrainer:
         quarters_per_supplier_set: int = 5,
         cost_vs_chance_median: Optional[float] = None,
         cost_vs_chance_iqr: Optional[float] = None,
+        price_perception: bool = True,
+        price_memory_alpha: float = DEFAULT_PRICE_MEMORY_ALPHA,
+        price_bucket_z: float = DEFAULT_PRICE_BUCKET_Z,
+        price_reward_gain: float = DEFAULT_PRICE_REWARD_GAIN,
     ):
         self.agent = agent
         self.encoder = encoder
@@ -221,6 +233,11 @@ class SandboxTrainer:
         self.quarters_per_supplier_set = max(1, int(quarters_per_supplier_set))
         self.cost_vs_chance_median = cost_vs_chance_median
         self.cost_vs_chance_iqr = cost_vs_chance_iqr
+        self.price_perception = bool(price_perception)
+        self.price_memory_alpha = float(price_memory_alpha)
+        self.price_bucket_z = float(price_bucket_z)
+        self.price_reward_gain = float(price_reward_gain)
+        self.price_memory = PriceMemory(alpha=self.price_memory_alpha)
         self.last_decision_log: List[dict] = []
         # Stage 1b supplier continuity. Kept on the trainer, not in a local, so
         # that a checkpointed run calling run_quarters(n_quarters=1) in a loop
@@ -492,20 +509,31 @@ class SandboxTrainer:
                 break
 
             tick_result = world.history[-1] if world.history else {"events": []}
-            context_events = self.encoder.encode_daily_context(world, tick_result)
 
             if last_order_result is not None:
                 feedback = self._apply_order_feedback(last_order_result)
                 self._log_pipeline_feedback(feedback)
                 last_order_result = None
 
+            # Same quote book the motor will see, collected once before the
+            # decision and before world.tick().
+            stock_obs = self._prepare_stock_observation(world)
+            supplier_obs = self._prepare_supplier_observation(world, stock_obs)
+            price_refs = self.price_memory.snapshot()
+            context_events = self.encoder.encode_daily_context(
+                world,
+                tick_result,
+                supplier_obs,
+                price_refs,
+                price_perception=self.price_perception,
+                price_bucket_z=self.price_bucket_z,
+            )
+
             activation_before = self._activation_snapshot()
             action_intent = self._agent_step(context_events, dt=86400.0)
             action_type = self._intent_to_action_type(action_intent)
             activated_count = self._activated_since(activation_before)
 
-            stock_obs = self._prepare_stock_observation(world)
-            supplier_obs = self._prepare_supplier_observation(world, stock_obs)
             order_params = self.motor_adapter.resolve(
                 action_type=action_type,
                 stock_obs=stock_obs,
@@ -521,10 +549,12 @@ class SandboxTrainer:
                     order_params.product_id,
                     order_params.qty,
                 )
+                price_reference = price_refs.get(str(order_params.product_id))
                 last_order_result = {
                     "params": order_params,
                     "result": order_result,
                     "world_state": world.observe_budget_status(),
+                    "price_reference": price_reference,
                 }
                 self._store_order_experience(
                     context_events, order_params, order_result
@@ -537,6 +567,22 @@ class SandboxTrainer:
                     self._quarter_strategy_counts[action_type] = (
                         self._quarter_strategy_counts.get(action_type, 0) + 1
                     )
+
+            if self.price_perception:
+                paid = None
+                if (
+                    order_params is not None
+                    and (order_result or {}).get("status") == "accepted"
+                ):
+                    paid = (
+                        order_params.product_id,
+                        (order_result or {}).get("unit_price"),
+                    )
+                self.price_memory.observe_day(
+                    perceived_product_ids(context_events),
+                    supplier_obs,
+                    paid,
+                )
 
             decision_log.append({
                 "day": world.day,
@@ -658,7 +704,15 @@ class SandboxTrainer:
         result = dict((last_order_result or {}).get("result") or {})
         status = result.get("status", "unknown")
         if status == "accepted":
-            reward = 0.4
+            # Saved on the decision day. A missing key is an old caller with
+            # no reference, not an invitation to read today's memory.
+            reference = None
+            if (
+                isinstance(last_order_result, dict)
+                and "price_reference" in last_order_result
+            ):
+                reference = last_order_result.get("price_reference")
+            reward = self._felt_accepted_reward(result, reference)
         elif status == "rejected":
             reason = result.get("reason", "unknown")
             reward = -0.5 if reason == "insufficient_budget" else -0.3
@@ -698,7 +752,11 @@ class SandboxTrainer:
         if not callable(store_fn):
             return
         status = str((order_result or {}).get("status", "unknown"))
-        reward = 0.4 if status == "accepted" else -0.3
+        if status == "accepted":
+            reference = self.price_memory.reference(str(order_params.product_id))
+            reward = self._felt_accepted_reward(order_result, reference)
+        else:
+            reward = -0.3
         episode_tokens = list(context_events) + [
             f"supplier:{order_params.supplier_id}",
             f"product:{order_params.product_id}",
@@ -732,6 +790,31 @@ class SandboxTrainer:
                 episode=stored,
                 intensity=abs(reward),
             )
+
+    def _felt_accepted_reward(self, result: dict, reference) -> float:
+        """Shared accepted-order reward for feedback and hippocampal store."""
+        return felt_accepted_reward(
+            (result or {}).get("unit_price"),
+            reference,
+            gain=self.price_reward_gain,
+            enabled=self.price_perception,
+        )
+
+    def checkpoint_metadata(self) -> Dict[str, Any]:
+        """Trainer state carried beside the agent checkpoint."""
+        return {
+            "carried_suppliers": self.carried_suppliers,
+            "price_memory": self.price_memory.to_dict(),
+        }
+
+    def restore_checkpoint_metadata(self, metadata: Optional[Mapping[str, Any]]) -> None:
+        """Restore trainer state. A checkpoint without price memory stays empty."""
+        meta = dict(metadata or {})
+        self.carried_suppliers = meta.get("carried_suppliers")
+        self.price_memory = PriceMemory.from_dict(
+            meta.get("price_memory"),
+            alpha=self.price_memory_alpha,
+        )
 
     @staticmethod
     def _prepare_stock_observation(world: ProcurementWorld) -> Dict[str, dict]:

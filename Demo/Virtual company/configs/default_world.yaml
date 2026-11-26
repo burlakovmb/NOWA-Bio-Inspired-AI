@@ -42,6 +42,13 @@ training:
   # quarter's own world seed draws the next set. Defaults: 4 sets × 5 quarters.
   supplier_set_count: 4
   quarters_per_supplier_set: 5
+  # Coarse price band (cheap/average/expensive) from quotes the agent can
+  # see, plus a felt-cost term on an accepted order. Off restores the flat
+  # 0.4 reward and omits price tokens (same seeds, previous behaviour).
+  price_perception: true
+  price_memory_alpha: 0.1
+  price_bucket_z: 0.5
+  price_reward_gain: 0.3
 
 # All six criteria are always measured and reported. Which of them gate
 # graduation depends on training.stage; the rest are monitored and guarded

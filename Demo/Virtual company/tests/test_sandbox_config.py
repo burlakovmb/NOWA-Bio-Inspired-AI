@@ -181,3 +181,76 @@ class TestCostVsChanceFloorDelta:
         assert SandboxConfig.from_yaml(high).stage_baseline.cost_vs_chance_floor_delta == (
             pytest.approx(0.05)
         )
+
+
+class TestPricePerception:
+
+    def test_shipped_defaults_round_trip(self):
+        config = SandboxConfig.from_yaml(DEFAULT_CONFIG_PATH)
+        assert config.training.price_perception is True
+        assert config.training.price_memory_alpha == pytest.approx(0.1)
+        assert config.training.price_bucket_z == pytest.approx(0.5)
+        assert config.training.price_reward_gain == pytest.approx(0.3)
+        restored = SandboxConfig.from_mapping(config.to_dict())
+        assert restored.to_dict() == config.to_dict()
+        training = restored.to_dict()["training"]
+        assert training["price_perception"] is True
+        assert training["price_memory_alpha"] == pytest.approx(0.1)
+        assert training["price_bucket_z"] == pytest.approx(0.5)
+        assert training["price_reward_gain"] == pytest.approx(0.3)
+
+    def test_missing_keys_keep_defaults(self, tmp_path):
+        path = tmp_path / "partial.yaml"
+        path.write_text("training:\n  n_quarters: 4\n", encoding="utf-8")
+        training = SandboxConfig.from_yaml(path).training
+        assert training.n_quarters == 4
+        assert training.price_perception is True
+        assert training.price_memory_alpha == pytest.approx(0.1)
+        assert training.price_bucket_z == pytest.approx(0.5)
+        assert training.price_reward_gain == pytest.approx(0.3)
+
+    def test_flag_and_edges_round_trip(self, tmp_path):
+        path = tmp_path / "edges.yaml"
+        path.write_text(
+            "training:\n"
+            "  price_perception: false\n"
+            "  price_memory_alpha: 1\n"
+            "  price_bucket_z: 0.01\n"
+            "  price_reward_gain: 0.4\n",
+            encoding="utf-8",
+        )
+        config = SandboxConfig.from_yaml(path)
+        training = config.training
+        assert training.price_perception is False
+        assert training.price_memory_alpha == pytest.approx(1.0)
+        assert training.price_bucket_z == pytest.approx(0.01)
+        assert training.price_reward_gain == pytest.approx(0.4)
+        again = SandboxConfig.from_mapping(config.to_dict()).training
+        assert again.price_perception is False
+        assert again.price_reward_gain == pytest.approx(0.4)
+
+    def test_garbage_alpha_falls_back_to_default(self, tmp_path):
+        path = tmp_path / "garbage.yaml"
+        path.write_text(
+            "training:\n  price_memory_alpha: nope\n",
+            encoding="utf-8",
+        )
+        training = SandboxConfig.from_yaml(path).training
+        assert training.price_memory_alpha == pytest.approx(0.1)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "price_memory_alpha: 0\n",
+            "price_memory_alpha: 1.01\n",
+            "price_bucket_z: 0\n",
+            "price_bucket_z: -0.2\n",
+            "price_reward_gain: -0.01\n",
+            "price_reward_gain: 0.41\n",
+        ],
+    )
+    def test_out_of_range_values_are_rejected(self, tmp_path, text):
+        path = tmp_path / "bad.yaml"
+        path.write_text("training:\n  " + text, encoding="utf-8")
+        with pytest.raises(ValueError):
+            SandboxConfig.from_yaml(path)
