@@ -16,7 +16,12 @@ from .price_memory import (
     felt_accepted_reward,
     perceived_product_ids,
 )
-from .procurement_fitness import ProcurementFitnessEvaluator, ProcurementFitnessVector
+from .decision_consistency import ConsistencyConfig, decision_fields
+from .procurement_fitness import (
+    DEFAULT_CONSISTENCY,
+    ProcurementFitnessEvaluator,
+    ProcurementFitnessVector,
+)
 from .procurement_hippocampus_seeder import ProcurementHippocampusSeeder
 from .procurement_motor_adapter import OrderParams, ProcurementMotorAdapter
 from .procurement_world import (
@@ -34,6 +39,9 @@ from affective_space import AffectiveSpace  # noqa: E402
 GRADUATION_MIN_STREAK = 3
 """Section 26.7 / v1.1.1: Stage 1b graduation must hold for this many
 consecutive *qualifying* quarters, not trigger on the first lucky pass."""
+
+ORDER_TOOL = "place_order"
+"""World call the motor actually makes (``world.place_order``)."""
 
 
 def _quarter_qualifies(quarter: "QuarterResult") -> bool:
@@ -218,6 +226,7 @@ class SandboxTrainer:
         price_memory_alpha: float = DEFAULT_PRICE_MEMORY_ALPHA,
         price_bucket_z: float = DEFAULT_PRICE_BUCKET_Z,
         price_reward_gain: float = DEFAULT_PRICE_REWARD_GAIN,
+        consistency: Optional[ConsistencyConfig] = None,
     ):
         self.agent = agent
         self.encoder = encoder
@@ -237,6 +246,9 @@ class SandboxTrainer:
         self.price_memory_alpha = float(price_memory_alpha)
         self.price_bucket_z = float(price_bucket_z)
         self.price_reward_gain = float(price_reward_gain)
+        self.consistency = (
+            DEFAULT_CONSISTENCY if consistency is None else consistency
+        )
         self.price_memory = PriceMemory(alpha=self.price_memory_alpha)
         self.last_decision_log: List[dict] = []
         # Stage 1b supplier continuity. Kept on the trainer, not in a local, so
@@ -339,6 +351,9 @@ class SandboxTrainer:
             summary["action_counts"] = _action_counts(decision_log)
             summary["supplier_order_counts"] = dict(self._quarter_order_counts)
             summary["strategy_counts"] = dict(self._quarter_strategy_counts)
+            summary.update(
+                self.fitness_evaluator.consistency_diagnostics(decision_log)
+            )
             chance = float(
                 self.fitness_evaluator.chance_cost_efficiency(world, decision_log)
             )
@@ -592,6 +607,12 @@ class SandboxTrainer:
                 "qty": order_params.qty if order_params else None,
                 "confidence": order_params.confidence if order_params else None,
                 "result": order_result,
+                **decision_fields(
+                    order_params,
+                    ORDER_TOOL if order_params else None,
+                    context_events,
+                    self.consistency,
+                ),
             })
             self._log_pipeline_decision(
                 world.day,

@@ -405,9 +405,46 @@ class TestSupplierDiversification:
 class TestDecisionConsistency:
 
     def test_few_orders_give_neutral_score(self, small_world, fitness_evaluator):
-        log = [_order("supplier_000", "product_000") for _ in range(3)]
+        log = [_order("supplier_000", "product_000") for _ in range(2)]
         vector = fitness_evaluator.evaluate(small_world, log)
         assert vector.decision_consistency == 0.5
+
+    def test_three_identical_orders_meet_the_situation_minimum(
+        self, small_world, fitness_evaluator
+    ):
+        log = [_order("supplier_000", "product_000") for _ in range(3)]
+        vector = fitness_evaluator.evaluate(small_world, log)
+        assert vector.decision_consistency == 1.0
+
+    def test_two_situations_score_high_while_by_product_stays_low(
+        self, small_world, fitness_evaluator
+    ):
+        cheap = [
+            "price:product_000:cheap",
+            "product:product_000",
+            "status:below_reorder_point",
+        ]
+        expensive = [
+            "price:product_000:expensive",
+            "product:product_000",
+            "status:below_reorder_point",
+        ]
+        log = []
+        for _ in range(3):
+            entry = _order("supplier_000", "product_000")
+            entry["situation"] = list(cheap)
+            log.append(entry)
+        for _ in range(3):
+            entry = _order("supplier_001", "product_000")
+            entry["situation"] = list(expensive)
+            log.append(entry)
+        vector = fitness_evaluator.evaluate(small_world, log)
+        assert vector.decision_consistency == 1.0
+        diagnostics = fitness_evaluator.consistency_diagnostics(log)
+        assert diagnostics["decision_consistency_by_product"] == 0.5
+        assert diagnostics["decision_consistency_by_product"] < 1.0
+        assert diagnostics["decision_consistency_situations"] == 2
+        assert diagnostics["decision_consistency_decisions_used"] == 6
 
     def test_same_supplier_per_product_is_maximally_consistent(
         self, small_world, fitness_evaluator

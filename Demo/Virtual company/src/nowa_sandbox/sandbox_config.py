@@ -8,10 +8,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from ._common import clamp, safe_float, safe_int
-from .procurement_fitness import GRADUATION_THRESHOLDS, STAGE_CRITERIA
+from .decision_consistency import ConsistencyConfig
+from .procurement_fitness import (
+    DEFAULT_CONSISTENCY,
+    GRADUATION_THRESHOLDS,
+    STAGE_CRITERIA,
+)
 from .price_memory import (
     DEFAULT_PRICE_BUCKET_Z,
     DEFAULT_PRICE_MEMORY_ALPHA,
@@ -59,6 +64,78 @@ def _price_reward_gain(value: Any, default: float) -> float:
         )
     return number
 
+def _consistency_nonempty_str(value: Any, key: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} must be a non-empty string, got {value!r}")
+    return value
+
+
+def _consistency_str_list(value: Any, key: str, *, non_empty: bool) -> Tuple[str, ...]:
+    if isinstance(value, str) or not isinstance(value, list):
+        raise ValueError(f"{key} must be a list of strings, got {value!r}")
+    if non_empty and len(value) == 0:
+        raise ValueError(
+            f"{key} must be a non-empty list of strings, got {value!r}"
+        )
+    items = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"{key} must be a list of strings, got {value!r}")
+        items.append(item)
+    return tuple(items)
+
+
+def _consistency_min_decisions(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 2:
+        raise ValueError(
+            f"consistency.min_decisions must be an integer >= 2, got {value!r}"
+        )
+    return value
+
+
+def _consistency_neutral(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"consistency.neutral must be in [0, 1], got {value!r}"
+        )
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(
+            f"consistency.neutral must be in [0, 1], got {value!r}"
+        )
+    return number
+
+
+def _consistency_from_mapping(raw: Any) -> ConsistencyConfig:
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"consistency must be a mapping, got {raw!r}")
+    data = dict(raw)
+    defaults = DEFAULT_CONSISTENCY
+    return ConsistencyConfig(
+        entity_field=_consistency_nonempty_str(
+            data.get("entity_field", defaults.entity_field),
+            "consistency.entity_field",
+        ),
+        choice_field=_consistency_nonempty_str(
+            data.get("choice_field", defaults.choice_field),
+            "consistency.choice_field",
+        ),
+        attached_prefixes=_consistency_str_list(
+            data.get("attached_prefixes", list(defaults.attached_prefixes)),
+            "consistency.attached_prefixes",
+            non_empty=False,
+        ),
+        counted_statuses=_consistency_str_list(
+            data.get("counted_statuses", list(defaults.counted_statuses)),
+            "consistency.counted_statuses",
+            non_empty=True,
+        ),
+        min_decisions=_consistency_min_decisions(
+            data.get("min_decisions", defaults.min_decisions)
+        ),
+        neutral=_consistency_neutral(data.get("neutral", defaults.neutral)),
+    )
+
 
 @dataclass
 class TrainingConfig:
@@ -103,6 +180,7 @@ class SandboxConfig:
         default_factory=lambda: dict(GRADUATION_THRESHOLDS)
     )
     stage_baseline: StageBaselineConfig = field(default_factory=StageBaselineConfig)
+    consistency: ConsistencyConfig = field(default_factory=lambda: DEFAULT_CONSISTENCY)
     output: OutputConfig = field(default_factory=OutputConfig)
 
     @classmethod
@@ -239,6 +317,9 @@ class SandboxConfig:
             ),
         )
 
+        if data.get("consistency") is not None:
+            config.consistency = _consistency_from_mapping(data["consistency"])
+
         output = dict(data.get("output") or {})
         config.output = OutputConfig(
             results_dir=str(output.get("results_dir", "results/")),
@@ -307,6 +388,14 @@ class SandboxConfig:
             "graduation_thresholds": dict(self.graduation_thresholds),
             "stage_baseline": {
                 "cost_vs_chance_floor_delta": self.stage_baseline.cost_vs_chance_floor_delta,
+            },
+            "consistency": {
+                "entity_field": self.consistency.entity_field,
+                "choice_field": self.consistency.choice_field,
+                "attached_prefixes": list(self.consistency.attached_prefixes),
+                "counted_statuses": list(self.consistency.counted_statuses),
+                "min_decisions": self.consistency.min_decisions,
+                "neutral": self.consistency.neutral,
             },
             "output": {
                 "results_dir": self.output.results_dir,

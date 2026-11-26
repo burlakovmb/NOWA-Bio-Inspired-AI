@@ -3,6 +3,7 @@
 import pytest
 
 from nowa_sandbox.procurement_fitness import (
+    DEFAULT_CONSISTENCY,
     GRADUATION_THRESHOLDS,
     ProcurementFitnessEvaluator,
 )
@@ -136,7 +137,8 @@ class TestRoundTrip:
     def test_to_dict_contains_all_sections(self):
         data = SandboxConfig.load(None).to_dict()
         assert set(data) == {
-            "world", "training", "graduation_thresholds", "stage_baseline", "output",
+            "world", "training", "graduation_thresholds", "stage_baseline",
+            "consistency", "output",
         }
 
     def test_to_dict_round_trips_through_from_mapping(self):
@@ -253,4 +255,80 @@ class TestPricePerception:
         path = tmp_path / "bad.yaml"
         path.write_text("training:\n  " + text, encoding="utf-8")
         with pytest.raises(ValueError):
+            SandboxConfig.from_yaml(path)
+
+
+class TestConsistencyBinding:
+
+    def test_missing_section_keeps_the_procurement_default(self, tmp_path):
+        path = tmp_path / "legacy.yaml"
+        path.write_text("world:\n  n_products: 4\n", encoding="utf-8")
+        config = SandboxConfig.from_yaml(path)
+        assert config.world.n_products == 4
+        assert config.consistency == DEFAULT_CONSISTENCY
+
+    def test_shipped_yaml_binds_the_buyer_fields(self):
+        config = SandboxConfig.from_yaml(DEFAULT_CONFIG_PATH)
+        assert config.consistency == DEFAULT_CONSISTENCY
+        assert config.graduation_thresholds["decision_consistency"] == 0.60
+        section = config.to_dict()["consistency"]
+        assert section["entity_field"] == "product_id"
+        assert section["choice_field"] == "supplier_id"
+        assert section["attached_prefixes"] == ["status:"]
+        assert section["counted_statuses"] == ["accepted"]
+        assert section["min_decisions"] == 3
+        assert section["neutral"] == 0.5
+
+    def test_partial_section_keeps_other_defaults(self, tmp_path):
+        path = tmp_path / "partial.yaml"
+        path.write_text("consistency:\n  min_decisions: 5\n", encoding="utf-8")
+        consistency = SandboxConfig.from_yaml(path).consistency
+        assert consistency.min_decisions == 5
+        assert consistency.entity_field == DEFAULT_CONSISTENCY.entity_field
+        assert consistency.choice_field == DEFAULT_CONSISTENCY.choice_field
+        assert consistency.attached_prefixes == DEFAULT_CONSISTENCY.attached_prefixes
+
+    def test_section_round_trips(self, tmp_path):
+        path = tmp_path / "routes.yaml"
+        path.write_text(
+            "consistency:\n"
+            "  entity_field: route_id\n"
+            "  choice_field: carrier_id\n"
+            "  attached_prefixes: ['status:', 'note:']\n"
+            "  counted_statuses: ['delivered', 'partial']\n"
+            "  min_decisions: 2\n"
+            "  neutral: 0.25\n",
+            encoding="utf-8",
+        )
+        config = SandboxConfig.from_yaml(path)
+        assert config.consistency.entity_field == "route_id"
+        assert config.consistency.choice_field == "carrier_id"
+        assert config.consistency.attached_prefixes == ("status:", "note:")
+        assert config.consistency.counted_statuses == ("delivered", "partial")
+        assert config.consistency.min_decisions == 2
+        assert config.consistency.neutral == 0.25
+        restored = SandboxConfig.from_mapping(config.to_dict())
+        assert restored.consistency == config.consistency
+
+    @pytest.mark.parametrize(
+        "text, key",
+        [
+            ("entity_field: ''\n", "consistency.entity_field"),
+            ("entity_field: 3\n", "consistency.entity_field"),
+            ("choice_field: '   '\n", "consistency.choice_field"),
+            ("attached_prefixes: \"status:\"\n", "consistency.attached_prefixes"),
+            ("attached_prefixes: [1]\n", "consistency.attached_prefixes"),
+            ("counted_statuses: []\n", "consistency.counted_statuses"),
+            ("counted_statuses: [1]\n", "consistency.counted_statuses"),
+            ("min_decisions: 1\n", "consistency.min_decisions"),
+            ("min_decisions: 2.5\n", "consistency.min_decisions"),
+            ("neutral: 1.2\n", "consistency.neutral"),
+            ("neutral: -0.01\n", "consistency.neutral"),
+            ("neutral: nope\n", "consistency.neutral"),
+        ],
+    )
+    def test_invalid_values_name_the_key(self, tmp_path, text, key):
+        path = tmp_path / "bad.yaml"
+        path.write_text("consistency:\n  " + text, encoding="utf-8")
+        with pytest.raises(ValueError, match=key):
             SandboxConfig.from_yaml(path)

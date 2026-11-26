@@ -263,6 +263,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         thresholds=config.graduation_thresholds,
         stage=config.training.stage,
         cost_vs_chance_floor_delta=config.stage_baseline.cost_vs_chance_floor_delta,
+        consistency=config.consistency,
     )
     log(f"[Init] Curriculum stage {config.training.stage} "
         f"(gating on {', '.join(fitness_evaluator.gating_criteria)})")
@@ -285,6 +286,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         price_memory_alpha=config.training.price_memory_alpha,
         price_bucket_z=config.training.price_bucket_z,
         price_reward_gain=config.training.price_reward_gain,
+        consistency=config.consistency,
     )
     if checkpoint is not None:
         trainer.restore_checkpoint_metadata(checkpoint.metadata)
