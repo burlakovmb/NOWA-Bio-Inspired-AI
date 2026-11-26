@@ -270,10 +270,10 @@ class TestConsistencyBinding:
     def test_shipped_yaml_binds_the_buyer_fields(self):
         config = SandboxConfig.from_yaml(DEFAULT_CONFIG_PATH)
         assert config.consistency == DEFAULT_CONSISTENCY
-        assert config.graduation_thresholds["decision_consistency"] == 0.60
+        assert config.graduation_thresholds["decision_consistency"] == 0.79
         section = config.to_dict()["consistency"]
         assert section["entity_field"] == "product_id"
-        assert section["choice_field"] == "supplier_id"
+        assert section["choice_field"] == "action"
         assert section["attached_prefixes"] == ["status:"]
         assert section["counted_statuses"] == ["accepted"]
         assert section["min_decisions"] == 3

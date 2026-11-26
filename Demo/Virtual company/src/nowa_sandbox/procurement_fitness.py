@@ -51,7 +51,7 @@ GRADUATION_THRESHOLDS = {
     "stockout_avoidance": 0.85,
     "budget_discipline": 0.95,
     "supplier_diversification": 0.40,
-    "decision_consistency": 0.60,
+    "decision_consistency": 0.79,
     "reaction_to_risk_events": 0.50,
 }
 
@@ -160,7 +160,7 @@ def _order_attempts(decision_log: List[dict]) -> List[dict]:
 
 DEFAULT_CONSISTENCY = ConsistencyConfig(
     entity_field="product_id",
-    choice_field="supplier_id",
+    choice_field="action",
     attached_prefixes=("status:",),
 )
 
@@ -501,13 +501,26 @@ class ProcurementFitnessEvaluator:
         return consistency_report(decision_log, self.consistency).value
 
     def consistency_diagnostics(self, decision_log: List[dict]) -> dict:
-        """Legacy by-entity score plus the situation-group counts.
+        """Situation counts for the configured choice, plus supplier share.
 
-        The graduation vector keeps only the new situation metric.
+        Graduation uses the configured choice. The by-product diagnostic
+        keeps the previous concentration of ``supplier_id`` inside each
+        entity, so a stable strategy whose supplier changes stays visible.
         """
         report = consistency_report(decision_log, self.consistency)
+        supplier_rows = []
+        for entry in decision_log or []:
+            if not isinstance(entry, Mapping):
+                supplier_rows.append(entry)
+                continue
+            row = dict(entry)
+            row["choice"] = row.get("supplier_id")
+            supplier_rows.append(row)
+        by_product = consistency_report(
+            supplier_rows, self.consistency
+        ).by_entity_legacy
         return {
-            "decision_consistency_by_product": report.by_entity_legacy,
+            "decision_consistency_by_product": by_product,
             "decision_consistency_situations": report.situations_used,
             "decision_consistency_decisions_used": report.decisions_used,
         }

@@ -1,5 +1,7 @@
 """Tests for ProcurementFitnessEvaluator."""
 
+from dataclasses import replace
+
 import pytest
 
 from nowa_sandbox.procurement_fitness import (
@@ -432,10 +434,12 @@ class TestDecisionConsistency:
         log = []
         for _ in range(3):
             entry = _order("supplier_000", "product_000")
+            entry["action"] = "place_order_cheap_supplier"
             entry["situation"] = list(cheap)
             log.append(entry)
         for _ in range(3):
             entry = _order("supplier_001", "product_000")
+            entry["action"] = "place_order_reliable_supplier"
             entry["situation"] = list(expensive)
             log.append(entry)
         vector = fitness_evaluator.evaluate(small_world, log)
@@ -458,8 +462,38 @@ class TestDecisionConsistency:
             _order(f"supplier_{i % 2:03d}", "product_000")
             for i in range(6)
         ]
-        vector = fitness_evaluator.evaluate(small_world, log)
+        supplier_eval = ProcurementFitnessEvaluator(
+            consistency=replace(
+                fitness_evaluator.consistency, choice_field="supplier_id"
+            )
+        )
+        vector = supplier_eval.evaluate(small_world, log)
         assert vector.decision_consistency < 1.0
+
+    def test_same_strategy_scores_high_while_supplier_by_product_stays_low(
+        self, small_world, fitness_evaluator
+    ):
+        situation = [
+            "price:product_000:cheap",
+            "product:product_000",
+            "status:below_reorder_point",
+        ]
+        log = []
+        for i in range(6):
+            entry = _order(f"supplier_{i % 2:03d}", "product_000")
+            entry["action"] = "place_order_cheap_supplier"
+            entry["situation"] = list(situation)
+            log.append(entry)
+        vector = fitness_evaluator.evaluate(small_world, log)
+        diagnostics = fitness_evaluator.consistency_diagnostics(log)
+        assert vector.decision_consistency == 1.0
+        assert diagnostics["decision_consistency_situations"] == 1
+        assert diagnostics["decision_consistency_decisions_used"] == 6
+        assert diagnostics["decision_consistency_by_product"] == 0.5
+        assert (
+            diagnostics["decision_consistency_by_product"]
+            < vector.decision_consistency
+        )
 
 
 def _world_with_events(events, day=3):

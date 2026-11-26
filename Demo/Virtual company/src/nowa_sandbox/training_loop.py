@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from ._common import ensure_core_src_on_path
@@ -599,6 +599,13 @@ class SandboxTrainer:
                     paid,
                 )
 
+            # choice_field is read from the call. The strategy the brain
+            # passed the motor is the log's action, which OrderParams does
+            # not carry, so expose it beside the other call fields.
+            call_for_fields = order_params
+            if order_params is not None:
+                call_for_fields = asdict(order_params)
+                call_for_fields["action"] = action_type
             decision_log.append({
                 "day": world.day,
                 "action": action_type,
@@ -608,7 +615,7 @@ class SandboxTrainer:
                 "confidence": order_params.confidence if order_params else None,
                 "result": order_result,
                 **decision_fields(
-                    order_params,
+                    call_for_fields,
                     ORDER_TOOL if order_params else None,
                     context_events,
                     self.consistency,

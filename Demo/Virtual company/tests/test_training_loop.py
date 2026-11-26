@@ -773,7 +773,8 @@ class TestDecisionLogSituation:
                 idle.append(entry)
                 continue
             assert entry["entity"] == entry["product_id"]
-            assert entry["choice"] == entry["supplier_id"]
+            assert entry["choice"] == entry["action"]
+            assert entry["supplier_id"] not in (None, entry["choice"])
             assert entry["tool"] == "place_order"
             for token in entry["situation"]:
                 assert token in context
