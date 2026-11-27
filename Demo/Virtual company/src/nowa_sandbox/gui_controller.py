@@ -448,6 +448,7 @@ class RunController:
             thresholds=config.graduation_thresholds,
             stage=config.training.stage,
             cost_vs_chance_floor_delta=config.stage_baseline.cost_vs_chance_floor_delta,
+            consistency=config.consistency,
         )
         self._log(
             on_log,
@@ -482,6 +483,7 @@ class RunController:
             price_memory_alpha=config.training.price_memory_alpha,
             price_bucket_z=config.training.price_bucket_z,
             price_reward_gain=config.training.price_reward_gain,
+            consistency=config.consistency,
         )
         trainer.quarter_overrides = {
             int(k): dict(v) for k, v in dict(spec.quarter_overrides or {}).items()

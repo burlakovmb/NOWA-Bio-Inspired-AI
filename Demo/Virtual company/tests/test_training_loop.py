@@ -695,3 +695,110 @@ class TestLeadTimeReplenishment:
         )
         assert len(result.quarters) == 1
         assert result.quarters[0].fitness.stockout_avoidance >= 0.85
+
+
+def _situation_token_ok(token, product_id):
+    text = str(token)
+    if text.startswith("status:"):
+        return True
+    return str(product_id) in text.split(":")[1:]
+
+
+class _ContextRecordingAgent:
+    """Replays actions and keeps the context each day was decided on."""
+
+    def __init__(self, actions):
+        self.actions = list(actions)
+        self.calls = 0
+        self.contexts = []
+        self.sleep_manager = None
+
+    def step(self, context_events, reward=0.0, intensity=1.0, novelty=0.0):
+        self.contexts.append(list(context_events))
+        action = self.actions[self.calls % len(self.actions)]
+        self.calls += 1
+        return action
+
+
+class TestDecisionLogSituation:
+
+    def _run(self, encoder, fitness_evaluator, *, price_perception):
+        agent = _ContextRecordingAgent(
+            ["wait_and_monitor", "place_order_cheap_supplier"]
+        )
+        trainer = SandboxTrainer(
+            agent,
+            encoder,
+            fitness_evaluator,
+            sleep_every_n_days=99,
+            price_perception=price_perception,
+        )
+        result = trainer.run_quarters(
+            n_quarters=1,
+            world_config=ProcurementWorldConfig(
+                initial_budget=500_000.0,
+                n_products=3,
+                n_suppliers=3,
+                days_per_quarter=30,
+                seed=1,
+            ),
+            stop_on_graduation=False,
+        )
+        return agent, trainer, result
+
+    def test_rows_carry_the_day_context_and_summary_diagnostics(
+        self, encoder, fitness_evaluator
+    ):
+        agent, trainer, result = self._run(
+            encoder, fitness_evaluator, price_perception=True
+        )
+        log = trainer.last_decision_log
+        assert len(agent.contexts) == len(log)
+        ordered = []
+        idle = []
+        old_fields = (
+            "day", "action", "supplier_id", "product_id",
+            "qty", "confidence", "result",
+        )
+        for entry, context in zip(log, agent.contexts):
+            for key in old_fields:
+                assert key in entry
+            assert "tool" in entry and "entity" in entry
+            assert "choice" in entry and "situation" in entry
+            if entry["product_id"] is None:
+                assert entry["entity"] is None
+                assert entry["choice"] is None
+                assert entry["tool"] is None
+                assert entry["situation"] == []
+                idle.append(entry)
+                continue
+            assert entry["entity"] == entry["product_id"]
+            assert entry["choice"] == entry["action"]
+            assert entry["supplier_id"] not in (None, entry["choice"])
+            assert entry["tool"] == "place_order"
+            for token in entry["situation"]:
+                assert token in context
+                assert _situation_token_ok(token, entry["product_id"])
+            ordered.append(entry)
+        assert ordered, "expected at least one day with an order"
+        assert idle, "expected at least one day without an order"
+        summary = result.quarters[0].world_summary
+        assert "decision_consistency_by_product" in summary
+        assert "decision_consistency_situations" in summary
+        assert "decision_consistency_decisions_used" in summary
+
+    def test_situation_omits_price_tokens_when_perception_is_off(
+        self, encoder, fitness_evaluator
+    ):
+        _agent, trainer, _result = self._run(
+            encoder, fitness_evaluator, price_perception=False
+        )
+        ordered = [
+            entry for entry in trainer.last_decision_log
+            if entry["product_id"] is not None
+        ]
+        assert ordered
+        for entry in trainer.last_decision_log:
+            assert not any(
+                str(token).startswith("price:") for token in entry["situation"]
+            )

@@ -74,6 +74,9 @@ results to obtain a pass. Distinguish short diagnostics using a historical
 baseline from a full five-seed qualification. Preserve existing employee minds;
 evaluate retained tags on copies and do not silently repair or retrain them.
 
+Graduation criteria, price perception, and decision consistency (issue #76):
+[issue-76-vc-graduation-metrics.en.md](issue-76-vc-graduation-metrics.en.md).
+
 The public [checkpoint report](../qa/vc-onboarding-snapshot-2026-11-08.en.md)
 records version limits and verification. Private employee corpora, checkpoints,
 local development settings and session protocols are not repository deliverables.

@@ -61,7 +61,7 @@ graduation_thresholds:
   reaction_to_risk_events: 0.50
   # Stage 1b gating criteria
   supplier_diversification: 0.40
-  decision_consistency: 0.60
+  decision_consistency: 0.79
 
 # Stage 1a baseline parameters for the Stage 1b non-regression guard.
 stage_baseline:
@@ -69,6 +69,17 @@ stage_baseline:
   # or near-zero Stage 1a baseline must not let a random policy pass the
   # guard. Allowed range: 0.02–0.05.
   cost_vs_chance_floor_delta: 0.03
+
+# Binding of the domain-neutral consistency metric onto the buyer call.
+# The metric only sees an entity, a choice, a situation (context tokens),
+# and a result status. These names are the procurement binding.
+consistency:
+  entity_field: product_id
+  choice_field: action
+  attached_prefixes: ["status:"]
+  counted_statuses: ["accepted"]
+  min_decisions: 3
+  neutral: 0.5
 
 output:
   results_dir: "results/"

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional
 
 from ._common import clamp, safe_float
+from .decision_consistency import ConsistencyConfig, consistency_report
 
 
 PROCUREMENT_CRITERIA = [
@@ -50,7 +51,7 @@ GRADUATION_THRESHOLDS = {
     "stockout_avoidance": 0.85,
     "budget_discipline": 0.95,
     "supplier_diversification": 0.40,
-    "decision_consistency": 0.60,
+    "decision_consistency": 0.79,
     "reaction_to_risk_events": 0.50,
 }
 
@@ -157,6 +158,13 @@ def _order_attempts(decision_log: List[dict]) -> List[dict]:
     return attempts
 
 
+DEFAULT_CONSISTENCY = ConsistencyConfig(
+    entity_field="product_id",
+    choice_field="action",
+    attached_prefixes=("status:",),
+)
+
+
 class ProcurementFitnessEvaluator:
     """Score one agent's quarter of simulated work.
 
@@ -172,6 +180,7 @@ class ProcurementFitnessEvaluator:
         stage: str = "1a",
         normalize_stockout_difficulty: bool = False,
         cost_vs_chance_floor_delta: Optional[float] = None,
+        consistency: Optional[ConsistencyConfig] = None,
     ):
         if stage not in STAGE_CRITERIA:
             raise ValueError(
@@ -190,6 +199,9 @@ class ProcurementFitnessEvaluator:
             else cost_vs_chance_floor_delta
         )
         self.cost_vs_chance_floor_delta = clamp_cost_vs_chance_floor_delta(raw_delta)
+        self.consistency = (
+            DEFAULT_CONSISTENCY if consistency is None else consistency
+        )
         merged = dict(GRADUATION_THRESHOLDS)
         for criterion, value in dict(thresholds or {}).items():
             if criterion in merged:
@@ -485,30 +497,33 @@ class ProcurementFitnessEvaluator:
         return clamp(0.6 * diversity_score + 0.4 * supplier_count_bonus, 0.0, 1.0)
 
     def _decision_consistency(self, decision_log: List[dict]) -> float:
-        """Similar situations should produce similar decisions.
+        """Повторяет ли агент выбор, когда повторяется ситуация (набор токенов контекста по сущности решения); доменно-нейтрально, привязка — в конфиге `consistency`."""
+        return consistency_report(decision_log, self.consistency).value
 
-        High variance of supplier choice for the same product means chaotic,
-        unpredictable behaviour and scores low.
+    def consistency_diagnostics(self, decision_log: List[dict]) -> dict:
+        """Situation counts for the configured choice, plus supplier share.
+
+        Graduation uses the configured choice. The by-product diagnostic
+        keeps the previous concentration of ``supplier_id`` inside each
+        entity, so a stable strategy whose supplier changes stays visible.
         """
-        orders = _accepted_orders(decision_log)
-        if len(orders) < 4:
-            return 0.5
-
-        by_product = defaultdict(list)
-        for order in orders:
-            by_product[order.get("product_id")].append(order)
-
-        consistency_scores = []
-        for product_orders in by_product.values():
-            if len(product_orders) < 2:
+        report = consistency_report(decision_log, self.consistency)
+        supplier_rows = []
+        for entry in decision_log or []:
+            if not isinstance(entry, Mapping):
+                supplier_rows.append(entry)
                 continue
-            suppliers_used = [o.get("supplier_id") for o in product_orders]
-            most_common_count = Counter(suppliers_used).most_common(1)[0][1]
-            consistency_scores.append(most_common_count / len(suppliers_used))
-
-        if not consistency_scores:
-            return 0.5
-        return clamp(sum(consistency_scores) / len(consistency_scores), 0.0, 1.0)
+            row = dict(entry)
+            row["choice"] = row.get("supplier_id")
+            supplier_rows.append(row)
+        by_product = consistency_report(
+            supplier_rows, self.consistency
+        ).by_entity_legacy
+        return {
+            "decision_consistency_by_product": by_product,
+            "decision_consistency_situations": report.situations_used,
+            "decision_consistency_decisions_used": report.decisions_used,
+        }
 
     def _reaction_to_risk_events(self, world: Any, decision_log: List[dict]) -> float:
         """After an *actionable* external risk, the agent should try to act.
