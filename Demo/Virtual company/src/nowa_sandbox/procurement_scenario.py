@@ -161,6 +161,16 @@ class ProcurementScenario(Scenario):
     def graduation_report(self, fitness) -> dict:
         return self.host.fitness_evaluator.graduation_report(fitness)
 
+    def fitness_line(self, fitness) -> str:
+        return (
+            f"cost_eff={fitness.cost_efficiency:.2f} "
+            f"stockout_avoid={fitness.stockout_avoidance:.2f} "
+            f"budget_disc={fitness.budget_discipline:.2f} "
+            f"diversif={fitness.supplier_diversification:.2f} "
+            f"consist={fitness.decision_consistency:.2f} "
+            f"risk_react={fitness.reaction_to_risk_events:.2f} "
+        )
+
     def summary_extras(
         self, world, decision_log, fitness, period_index, result, carry_roster, labels,
     ) -> dict:

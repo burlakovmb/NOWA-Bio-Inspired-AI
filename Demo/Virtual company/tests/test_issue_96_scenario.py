@@ -21,8 +21,10 @@ GENERIC_MODULES = (
     "scenario_trainer.py",
 )
 
+# No trailing word boundary: ``supplier_diversification`` and ``stockout``
+# must match, not only a bare ``supplier`` or ``stock``.
 FORBIDDEN = re.compile(
-    r"\b(place_order|supplier|product|stock|price|sku|procurement)\b",
+    r"(?<![A-Za-z])(?:place_order|supplier|product|stockout|stock|price|sku|procurement)",
     flags=re.IGNORECASE,
 )
 
@@ -82,6 +84,12 @@ class _StubScenario(Scenario):
 
 
 class TestLexiconGuard:
+
+    def test_guard_sees_stems_inside_identifiers(self):
+        assert FORBIDDEN.search("supplier_diversification")
+        assert FORBIDDEN.search("stockout_avoidance")
+        assert FORBIDDEN.search("place_order_cheap")
+        assert FORBIDDEN.search("unit_price")
 
     @pytest.mark.parametrize("name", GENERIC_MODULES)
     def test_generic_layer_has_no_buyer_words(self, name):

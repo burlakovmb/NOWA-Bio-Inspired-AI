@@ -35,6 +35,16 @@ class Outcome:
     pending: Optional[Mapping[str, Any]] = None
 
 
+def render_fitness_line(fitness: Any) -> str:
+    """Dump numeric criteria. A domain that wants labels overrides the hook."""
+    as_dict = getattr(fitness, "as_dict", None)
+    values = as_dict() if callable(as_dict) else {}
+    rendered = " ".join(
+        f"{name}={float(value):.2f}" for name, value in dict(values).items()
+    )
+    return f"{rendered} " if rendered else ""
+
+
 class Scenario(ABC):
     """Hooks the trainer calls. World stepping defaults match a tick/day world.
 
@@ -152,6 +162,10 @@ class Scenario(ABC):
     def graduation_report(self, fitness: Any) -> dict:
         raise NotImplementedError
 
+    def fitness_line(self, fitness: Any) -> str:
+        """Summary fragment for one period. Domains replace this."""
+        return render_fitness_line(fitness)
+
     def summary_extras(
         self,
         world: Any,
@@ -205,4 +219,5 @@ __all__ = [
     "Observation",
     "Outcome",
     "Scenario",
+    "render_fitness_line",
 ]

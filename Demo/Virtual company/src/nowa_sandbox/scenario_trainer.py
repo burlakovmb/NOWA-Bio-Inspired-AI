@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from .scenario import Scenario
+from .scenario import Scenario, render_fitness_line
 from .stage_mechanics import (
     GRADUATION_MIN_STREAK,
     action_counts,
@@ -19,33 +19,6 @@ from .stage_mechanics import (
     ensure_stage_start,
     period_qualifies,
 )
-
-
-def _fitness_summary(fitness: Any) -> str:
-    """Buyer line when the six criteria are present; otherwise ``as_dict``."""
-    names = (
-        "cost_efficiency",
-        "stockout_avoidance",
-        "budget_discipline",
-        "supplier_diversification",
-        "decision_consistency",
-        "reaction_to_risk_events",
-    )
-    if all(hasattr(fitness, name) for name in names):
-        return (
-            f"cost_eff={fitness.cost_efficiency:.2f} "
-            f"stockout_avoid={fitness.stockout_avoidance:.2f} "
-            f"budget_disc={fitness.budget_discipline:.2f} "
-            f"diversif={fitness.supplier_diversification:.2f} "
-            f"consist={fitness.decision_consistency:.2f} "
-            f"risk_react={fitness.reaction_to_risk_events:.2f} "
-        )
-    as_dict = getattr(fitness, "as_dict", None)
-    values = as_dict() if callable(as_dict) else {}
-    rendered = " ".join(
-        f"{name}={float(value):.2f}" for name, value in dict(values).items()
-    )
-    return f"{rendered} " if rendered else ""
 
 
 @dataclass
@@ -74,16 +47,22 @@ class SandboxTrainingResult:
     # None on an early-stage result and on checkpoints written before
     # set rotation.
     stage_1b_start_quarter: Optional[int] = None
+    # Set by the trainer from the active scenario. Absent on a result built
+    # by hand or loaded from a checkpoint that has not been resumed yet.
+    fitness_line: Optional[Callable[[Any], str]] = field(
+        default=None, repr=False, compare=False
+    )
 
     def summary(self) -> str:
         lines = ["=== Sandbox Training Summary ==="]
+        render = self.fitness_line or render_fitness_line
         for i, quarter in enumerate(self.quarters):
             status = "PASS" if quarter.graduation.get("all_passed") else "..."
             regressed = quarter.regressed_criteria
             streak = current_qualifying_streak(self.quarters[: i + 1])
             lines.append(
                 f"Quarter {quarter.quarter_index}: [{status}] "
-                f"{_fitness_summary(quarter.fitness)}"
+                f"{render(quarter.fitness)}"
                 f"qualifying_streak={streak}"
                 + (f"  REGRESSED: {', '.join(regressed)}" if regressed else "")
             )
@@ -151,9 +130,10 @@ class ScenarioTrainer:
     ) -> SandboxTrainingResult:
         """Run ``n_quarters`` additional periods, appending to prior results."""
         result = initial_result or SandboxTrainingResult()
+        scenario = self.scenario
+        result.fitness_line = scenario.fitness_line
         start_index = len(result.quarters) + 1
         total = len(result.quarters) + max(0, int(n_quarters))
-        scenario = self.scenario
 
         for offset in range(max(0, int(n_quarters))):
             if should_stop is not None and should_stop():
