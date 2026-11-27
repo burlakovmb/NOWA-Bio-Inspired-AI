@@ -1,15 +1,15 @@
 # QA issue #96 — доменно-нейтральный сценарий песочницы
 
-Ветка: `team/issue-96-scenario`. Голова: `2a2046d`. База: `0e486e1` (`origin/main`). Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/96. PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/99.
+Ветка: `team/issue-96-scenario`. Первый проход: `2a2046d`. Перепроверка: `f959f0a`, `815d2e9`. База: `0e486e1` (`origin/main`). Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/96. PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/99.
 English: [issue-96-scenario.en.md](issue-96-scenario.en.md).
 
 Машина: Linux, Python 3.12.3, pytest 9.2.0. CI фиксирует Python 3.12 (`.github/workflows/tests.yml`). Полный набор не перезапускался; по заданию CI на `d79f516` зелёный.
 
 ## Вердикт
 
-**FAIL.**
+**PASS** после перепроверки `f959f0a` и `815d2e9`. Первый проход на `2a2046d` был FAIL. Оба дефекта того прохода закрыты. Текст первого прохода ниже — запись того, что падало; перепроверка — текущий результат.
 
-Этапы 1–4 в ветке. `src/` не тронут. Исправленная заморозка (целый seed, как в `tests/logistics_scenario.py`) прогоняет пять эталонных срезов на настоящем `agent.Agent` и совпадает с `0e486e1` по полям. Зафиксированный эталон этого агента не измеряет. `tools/golden_issue_96.py` сеет незасеянный `random.Random()` кортежем. Python 3.12 кортеж отвергает, `SleepManager` не создаётся, `create_procurement_agent` глотает ошибку и возвращает `_FallbackAgent`. Все пять фикстур — этот fallback: каждое действие `wait_and_monitor`, заказов нет.
+Этапы 1–4 в ветке. `src/` не тронут. На `2a2046d` зафиксированный эталон не измерял ядро: `tools/golden_issue_96.py` сеял незасеянный `random.Random()` кортежем, Python 3.12 его отвергал, и `create_procurement_agent` возвращал `_FallbackAgent`. Все пять фикстур были этим fallback.
 
 ## Покрытие
 
@@ -97,13 +97,43 @@ golden_issue_96.py seed((42, n))
 - `PriceMemory` остаётся тонкой привязкой (`unit_price`, `price:`, `product:`, ключ записи `skus`).
 - CLI и GUI по-прежнему строят `SandboxTrainer` с прежними аргументами. Дым CLI: `--quarters 1 --days-per-quarter 2 --seed 42 --stage 1a --no-stop-on-graduation --quiet`, код 0. GUI не нажимался.
 
+## Перепроверка
+
+Проверялись `f959f0a` (целый seed `42 * 1_000_003 + n`, воркер отвергает fallback, пять фикстур пересняты) и `815d2e9` (строка сводки закупщика перенесена в `ProcurementScenario.fitness_line`, сторож видит основы внутри идентификаторов). Машина: Linux, Python 3.12.3, pytest 9.2.0. Код продукта в этом проходе не менялся.
+
+- сценарии: 6 пройдено / 0 провалено / 2 не запускалось
+
+| # | Проверка | Результат |
+| --- | --- | --- |
+| 1 | Копия исправленного `tools/golden_issue_96.py` на чистом worktree `0e486e1`, `--write --include-long` | Pass. В stderr на всех пяти срезах `core-agent agent.Agent` |
+| 2 | `cmp` этих пяти файлов с фикстурами, зафиксированными в ветке | Pass, байт-в-байт (8096, 6314, 7823, 6320, 26256 байт) |
+| 3 | `--check --include-long` на HEAD | Pass, код 0, пять `ok`, каждый воркер печатает `core-agent agent.Agent` |
+| 4 | Вернуть кортежный seed, запустить `test_issue_96_golden_matches_fixtures`, откатить файл | Pass как негативная проверка. Тест упал за 0.65s: `RuntimeError: golden slice requires core agent.Agent, got nowa_sandbox.sandbox_agent_factory._FallbackAgent`. Не закоммичено |
+| 5 | Дописать в `scenario_trainer.py` сначала `supplier_diversification`, потом `stockout_avoidance`, и запустить сторож | Pass как негативная проверка. Падения: `scenario_trainer.py contains 'supplier'` и `contains 'stockout'`. Обе вставки откатены |
+| 6 | `summary()` закупщика, seed 42, цена включена, 10 дней × 2, целая заморозка, HEAD против `0e486e1` | Pass, `cmp` совпал |
+
+Файл 90 дней, переснятый на `0e486e1`, — ядровый закупщик: 34 заказа, `cost_efficiency` 0.2728340576406023, `cost_vs_chance` -0.09060087344927437, смесь `diversify_supplier` 30, `place_order_cheap_supplier` 24, `urgent_reorder` 19, `place_order_reliable_supplier` 9, `wait_and_monitor` 8.
+
+Совпавший текст сводки:
+
+```text
+=== Sandbox Training Summary ===
+Quarter 1: [...] cost_eff=0.31 stockout_avoid=1.00 budget_disc=1.00 diversif=0.80 consist=0.50 risk_react=1.00 qualifying_streak=0
+Quarter 2: [...] cost_eff=0.33 stockout_avoid=1.00 budget_disc=1.00 diversif=0.85 consist=0.50 risk_react=1.00 qualifying_streak=0
+
+NOT YET GRADUATED - continue training
+```
+
+Целевой pytest, `-m "not slow"`, три модуля issue 96 плюс конфиг, база стадий, восприятие цены, выпуск, checkpoint и постоянные поставщики: `191 passed in 3.28s`. Логист входит в этот прогон. CLI: `python -m nowa_sandbox.run_sandbox --quarters 1 --seed 42 --stage 1a --no-stop-on-graduation --quiet`, код 0, один квартал, `n_days` 90.
+
+Не запускалось: GUI. Полный pytest (CI не ждали).
+
 ## Рекомендации
 
-- Починить seed эталона так, как уже сделано у логиста: целое число, не `(42, n)`. Переснять пять фикстур на ядровом агенте и оставить сравнение байтов. Проба с целым seed уже совпала с `0e486e1` на этих срезах, поэтому пересъём на HEAD должен зафиксировать настоящего закупщика, а не новое поведение.
-- Не считать зелёный `test_issue_96_golden` доказательством, что выбор мотора, награды и выпуск ядрового агента сохранились.
-- По желанию: расширить сторож, чтобы `supplier_diversification` и `stockout_avoidance` в `scenario_trainer.py` его роняли, либо перенести этот формат сводки к плагину закупщика.
-- Новые продуктовые тесты на форму книги, `n_orders` и `last_decision_log` не нужны, пока интерфейс не расширяют.
+- Два дефекта первого прохода закрыты. Дальше продукт из-за них менять не нужно.
+- Форма книги, `n_orders` и `last_decision_log` остаются принятыми ограничениями.
+- GUI в этом проходе не нажимался. Два коммита исправления его не трогают.
 
 ## Готовность к релизу
 
-- нет. Структурное разделение и игрушечный логист прогнаны, проверенные срезы ядра совпали с main, но обязательный эталон за ядром не следит.
+- да, с оговоркой: этот проход не нажимал GUI и не гнал полный набор. Эталон теперь следит за ядровым агентом, строка сводки закупщика на проверенном срезе совпала с `0e486e1`.

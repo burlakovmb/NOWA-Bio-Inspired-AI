@@ -1,15 +1,15 @@
 # QA issue #96 — domain-neutral sandbox scenario
 
-Branch: `team/issue-96-scenario`. Head: `2a2046d`. Baseline: `0e486e1` (`origin/main`). Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/96. PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/99.
+Branch: `team/issue-96-scenario`. First pass: `2a2046d`. Re-check: `f959f0a`, `815d2e9`. Baseline: `0e486e1` (`origin/main`). Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/96. PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/99.
 Russian: [issue-96-scenario.ru.md](issue-96-scenario.ru.md).
 
 Machine: Linux, Python 3.12.3, pytest 9.2.0. CI workflow pins Python 3.12 (`.github/workflows/tests.yml`). Full suite was not re-run; the user reported CI green on `d79f516`.
 
 ## Verdict
 
-**FAIL.**
+**PASS** after the re-check of `f959f0a` and `815d2e9`. The first pass on `2a2046d` was FAIL. Both defects from that pass are closed. The first-pass text below is the record of what failed; the re-check is the current result.
 
-Stages 1–4 are in the branch. `src/` is untouched. A corrected freeze (integer seed, same idea as `tests/logistics_scenario.py`) replays the five golden slices on the real `agent.Agent` and matches `0e486e1` field for field. The committed golden does not measure that agent. `tools/golden_issue_96.py` seeds unseeded `random.Random()` with a tuple. Python 3.12 rejects the tuple, `SleepManager` never finishes, and `create_procurement_agent` swallows the error and returns `_FallbackAgent`. All five fixtures are that fallback: every action is `wait_and_monitor`, no order is placed.
+Stages 1–4 are in the branch. `src/` is untouched. On `2a2046d` the committed golden did not measure the core agent: `tools/golden_issue_96.py` seeded unseeded `random.Random()` with a tuple, Python 3.12 rejected it, and `create_procurement_agent` returned `_FallbackAgent`. All five fixtures were that fallback.
 
 ## Coverage
 
@@ -97,13 +97,43 @@ Without the freeze, `create_procurement_agent` returns `agent.Agent`. The normal
 - `PriceMemory` remains a thin binding (`unit_price`, `price:`, `product:`, record key `skus`).
 - CLI and GUI still construct `SandboxTrainer` with the pre-refactor arguments. CLI smoke: `--quarters 1 --days-per-quarter 2 --seed 42 --stage 1a --no-stop-on-graduation --quiet`, exit 0. GUI was not clicked.
 
+## Re-check
+
+Fixes under test: `f959f0a` (integer seed `42 * 1_000_003 + n`, worker refuses a fallback, five fixtures recaptured) and `815d2e9` (buyer summary line moved to `ProcurementScenario.fitness_line`, guard matches stems inside identifiers). Machine: Linux, Python 3.12.3, pytest 9.2.0. Product code was not edited during this pass.
+
+- scenarios: 6 passed / 0 failed / 2 not run
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | Copy the fixed `tools/golden_issue_96.py` onto a clean `0e486e1` worktree and `--write --include-long` | Pass. stderr is `core-agent agent.Agent` on all five slices |
+| 2 | `cmp` those five files with the fixtures committed on the branch | Pass, byte-identical (8096, 6314, 7823, 6320, 26256 bytes) |
+| 3 | `--check --include-long` on HEAD | Pass, exit 0, five `ok`, each worker prints `core-agent agent.Agent` |
+| 4 | Put the tuple seed back, run `test_issue_96_golden_matches_fixtures`, restore the file | Pass as a negative check. The test failed in 0.65s: `RuntimeError: golden slice requires core agent.Agent, got nowa_sandbox.sandbox_agent_factory._FallbackAgent`. Not committed |
+| 5 | Append `supplier_diversification`, then `stockout_avoidance`, to `scenario_trainer.py` and run the guard | Pass as a negative check. Failures: `scenario_trainer.py contains 'supplier'` and `contains 'stockout'`. Both insertions reverted |
+| 6 | Buyer `summary()` for seed 42, price on, 10 days × 2, integer freeze, HEAD vs `0e486e1` | Pass, `cmp` identical |
+
+The 90-day file recaptured on `0e486e1` is the core buyer: 34 placed orders, `cost_efficiency` 0.2728340576406023, `cost_vs_chance` -0.09060087344927437, mix `diversify_supplier` 30, `place_order_cheap_supplier` 24, `urgent_reorder` 19, `place_order_reliable_supplier` 9, `wait_and_monitor` 8.
+
+Identical summary text:
+
+```text
+=== Sandbox Training Summary ===
+Quarter 1: [...] cost_eff=0.31 stockout_avoid=1.00 budget_disc=1.00 diversif=0.80 consist=0.50 risk_react=1.00 qualifying_streak=0
+Quarter 2: [...] cost_eff=0.33 stockout_avoid=1.00 budget_disc=1.00 diversif=0.85 consist=0.50 risk_react=1.00 qualifying_streak=0
+
+NOT YET GRADUATED - continue training
+```
+
+Targeted pytest, `-m "not slow"`, the three issue-96 modules plus config, stage baseline, price perception, graduation, checkpoint, and persistent suppliers: `191 passed in 3.28s`. That includes the logistician. CLI: `python -m nowa_sandbox.run_sandbox --quarters 1 --seed 42 --stage 1a --no-stop-on-graduation --quiet`, exit 0, one quarter, `n_days` 90.
+
+Not run: GUI. Full pytest (CI not waited on).
+
 ## Recommendations
 
-- Fix the golden seed the way logistics already did: an int, not `(42, n)`. Recapture the five fixtures on the core agent and keep the byte compare. The int-seed probe already matched `0e486e1` on those slices, so a recapture on HEAD should lock the real buyer rather than a new behavior.
-- Do not treat the current green `test_issue_96_golden` as evidence that motor choices, rewards, or graduation of the core agent survived.
-- Optional: extend the guard so `supplier_diversification` and `stockout_avoidance` in `scenario_trainer.py` fail it, or move that summary format next to the buyer plugin.
-- No new product tests are required for the quote-book shape, `n_orders`, or `last_decision_log` unless the interface is widened.
+- The two defects from the first pass are closed. No further product change is required for them.
+- Quote-book shape, `n_orders`, and `last_decision_log` stay accepted limits.
+- GUI was not clicked on this pass. The two fix commits do not touch it.
 
 ## Release readiness
 
-- no. The structural split and the toy logistician ran, and the probed core slices match main, but the required golden gate does not watch the core agent.
+- yes, with the limit that this pass did not click the GUI and did not run the full suite. The golden gate now watches the core agent, and the buyer summary line matches `0e486e1` on the probed slice.
