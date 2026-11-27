@@ -300,7 +300,8 @@ def test_tc22_rest_can_relocate_when_rng_triggers_move() -> None:
 
     agent._interpret_action("rest")
 
-    assert agent.position in {"house", "dustbath"}
+    # Every other rest zone is one hop from the floor; the low shelf too, since floor and shelf_lower link both ways.
+    assert agent.position in {"house", "dustbath", "shelf_lower"}
 
 
 def test_tc23_homeostatic_policy_blocks_sleep_without_need() -> None:
