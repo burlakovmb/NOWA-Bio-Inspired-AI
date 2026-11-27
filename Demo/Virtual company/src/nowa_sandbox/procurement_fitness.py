@@ -584,26 +584,14 @@ class ProcurementFitnessEvaluator:
         from. The rest are monitored: they are expected not to collapse, which
         is enforced separately by :meth:`check_non_regression`.
         """
-        active = set(STAGE_CRITERIA[self.stage])
-        criteria_results: Dict[str, dict] = {}
-        for criterion, threshold in self.thresholds.items():
-            value = safe_float(getattr(vector, criterion, 0.0), 0.0)
-            criteria_results[criterion] = {
-                "value": round(value, 4),
-                "threshold": threshold,
-                "passed": value >= threshold,
-                "gating": criterion in active,
-            }
+        from .stage_mechanics import graduation_report
 
-        gating_results = [r for r in criteria_results.values() if r["gating"]]
-        report: Dict[str, Any] = dict(criteria_results)
-        report["stage"] = self.stage
-        report["all_passed"] = bool(gating_results) and all(
-            r["passed"] for r in gating_results
+        return graduation_report(
+            vector,
+            self.thresholds,
+            self.stage,
+            STAGE_CRITERIA[self.stage],
         )
-        report["n_days"] = vector.n_days
-        report["n_orders"] = vector.n_orders
-        return report
 
     def check_non_regression(
         self,
@@ -632,46 +620,20 @@ class ProcurementFitnessEvaluator:
         ``cost_vs_chance_floor_delta`` (default 0.03). Baselines written
         before the normalized fields keep the raw cost check.
         """
-        from .stage_baseline import non_regression_floor
+        from .stage_mechanics import check_non_regression
 
-        baseline = stage_1a_baseline or {}
-        spread = stage_1a_spread_iqr or {}
-        result: Dict[str, bool] = {}
-        for criterion in STAGE_1A_CRITERIA:
-            if (
-                criterion == "cost_efficiency"
-                and cost_vs_chance_median is not None
-            ):
-                current = safe_float(
-                    cost_vs_chance
-                    if cost_vs_chance is not None
-                    else getattr(vector, criterion, 0.0),
-                    0.0,
-                )
-                median_value = safe_float(cost_vs_chance_median, 0.0)
-                floor = non_regression_floor(
-                    median_value,
-                    safe_float(cost_vs_chance_iqr, 0.0),
-                    base_multiplier=NON_REGRESSION_FLOOR,
-                    lower_bound=self.cost_vs_chance_floor_delta,
-                )
-                result[criterion] = current >= floor
-                continue
-            current = safe_float(getattr(vector, criterion, 0.0), 0.0)
-            if criterion not in baseline:
-                result[criterion] = True
-                continue
-            median_value = safe_float(baseline.get(criterion), 0.0)
-            if criterion in spread:
-                floor = non_regression_floor(
-                    median_value,
-                    safe_float(spread.get(criterion), 0.0),
-                    base_multiplier=NON_REGRESSION_FLOOR,
-                )
-            else:
-                floor = median_value * NON_REGRESSION_FLOOR
-            result[criterion] = current >= floor
-        return result
+        return check_non_regression(
+            vector,
+            STAGE_1A_CRITERIA,
+            stage_1a_baseline,
+            stage_1a_spread_iqr,
+            normalized_name="cost_efficiency",
+            normalized_value=cost_vs_chance,
+            normalized_median=cost_vs_chance_median,
+            normalized_spread=cost_vs_chance_iqr,
+            normalized_floor_delta=self.cost_vs_chance_floor_delta,
+            floor_fraction=NON_REGRESSION_FLOOR,
+        )
 
 
 __all__ = [
