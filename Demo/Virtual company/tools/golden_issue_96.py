@@ -11,8 +11,10 @@ Nondeterminism is frozen the same way in ``--write`` and ``--check``:
 - ``time.time`` fixed at 1700000000.0
 - address-space layout frozen (``setarch -R``), because the core walks sets of
   objects and their order follows ``id()``
-- unseeded ``random.Random()`` instances get ``(42, n)`` in construction order
-  (core sleep and affect generators otherwise read system entropy)
+- unseeded ``random.Random()`` instances get an integer
+  ``42 * 1_000_003 + n`` in construction order (core sleep and affect
+  generators otherwise read system entropy). A tuple seed is rejected by
+  this interpreter and would collapse the run onto the fallback buyer.
 
 Each case is a fresh process. A later case in the same process does not repeat.
 
@@ -75,17 +77,22 @@ def _install_freeze() -> None:
         step["n"] += 1
         return 1000.0 + step["n"] * 1e-6
 
+    def _frozen_seed(counter: int) -> int:
+        # An int, not ``(seed, n)``. Python 3.12 rejects a tuple here, and
+        # the buyer factory then swallows the error and returns a fallback.
+        return FROZEN_RANDOM_SEED * 1_000_003 + counter
+
     class _FrozenRandom(random.Random):
         def __init__(self, x=None):
             if x is None:
                 unseeded["n"] += 1
-                x = (FROZEN_RANDOM_SEED, unseeded["n"])
+                x = _frozen_seed(unseeded["n"])
             super().__init__(x)
 
         def seed(self, a=None, version=2):
             if a is None:
                 unseeded["n"] += 1
-                a = (FROZEN_RANDOM_SEED, unseeded["n"])
+                a = _frozen_seed(unseeded["n"])
             super().seed(a, version)
 
     random.Random = _FrozenRandom  # type: ignore[misc]
@@ -192,6 +199,21 @@ def _project_row(row: Dict[str, Any], price_tokens: List[str]) -> Dict[str, Any]
     }
 
 
+def _require_core_agent(agent: Any) -> None:
+    """Fail the slice when the factory returned the fallback buyer.
+
+    ``_create_core_agent`` swallows ``SleepManager`` construction errors.
+    A green byte compare of that fallback is not a core-agent gate.
+    """
+    from agent import Agent
+
+    kind = f"{type(agent).__module__}.{type(agent).__name__}"
+    if isinstance(agent, Agent) and type(agent).__name__ != "_FallbackAgent":
+        print(f"core-agent {kind}", file=sys.stderr)
+        return
+    raise RuntimeError(f"golden slice requires core agent.Agent, got {kind}")
+
+
 def capture_case(
     seed: int,
     price_perception: bool,
@@ -217,6 +239,7 @@ def capture_case(
         rng=rng,
         seed_intuition=config.training.seed_intuition,
     )
+    _require_core_agent(agent)
     encoder = SandboxEncoder()
     fitness = ProcurementFitnessEvaluator(
         thresholds=config.graduation_thresholds,
@@ -346,6 +369,11 @@ def _capture_text(name: str, include_long: bool) -> str:
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "worker failed")
+    if "core-agent agent.Agent" not in proc.stderr:
+        raise RuntimeError(
+            "worker did not report a core agent:\n" + proc.stderr.strip()
+        )
+    sys.stderr.write(proc.stderr)
     if not proc.stdout.startswith("{"):
         raise RuntimeError("worker stdout is not a payload:\n" + proc.stdout[:400])
     return proc.stdout
