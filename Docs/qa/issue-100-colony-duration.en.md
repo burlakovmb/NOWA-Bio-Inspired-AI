@@ -2,7 +2,9 @@
 
 Russian: [issue-100-colony-duration.ru.md](issue-100-colony-duration.ru.md).
 
-Branch: `team/issue-100-colony-duration`. HEAD: `8a7b94b` (`8a7b94bbe88ce631a40f1e3cfa5eb4527969fdf0`). PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/101. Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/100. Base: `main` `08930d8` (`08930d8e116ad19fb1fec5039b4cab75df617f33`), which is also the merge-base. Product code was not changed in this pass. No merge.
+**Current verdict (re-check of `684e619`): PASS.** The first-pass FAIL below is the record of `8a7b94b`. The re-check is the last section.
+
+Branch: `team/issue-100-colony-duration`. HEAD of the first pass: `8a7b94b` (`8a7b94bbe88ce631a40f1e3cfa5eb4527969fdf0`). PR: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/pull/101. Issue: https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/issues/100. Base: `main` `08930d8` (`08930d8e116ad19fb1fec5039b4cab75df617f33`), which is also the merge-base. Product code was not changed in this pass. No merge.
 
 Machine: Linux, Python 3.12.3, pytest 9.2.0. CI on `8a7b94b`: GitHub Actions `pytest` run [46156597667](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/actions/runs/46156597667), **6 failed, 2386 passed, 12 skipped**, 244.35 s. The full suite was not re-run locally. The six failures were reproduced locally, and the tests this PR added or edited were run locally.
 
@@ -149,3 +151,100 @@ They were not loosened into vacuous checks.
 ## Readiness
 
 **No.** The 120 s acceptance numbers and the untouched core are in place. CI is red, and a 1200 s colony loses three animals to the penalty band the hold was widened to survive.
+
+## Re-check
+
+HEAD: `684e619` (`684e6191b73046c2b191fd3f7938b83e984e5354`), fast-forward on top of the first-pass report `710834e`. PR #101, base `main` `08930d8`. Product code was not changed in this pass. `git diff main -- src/` is empty (0 bytes).
+
+### Verdict
+
+**PASS**
+
+The two majors are closed. Seed 42, 4 agents, `dt=0.25`, hold on, 1200 s: **0 deaths**, minimum energy **0.7225**, bouts ≤ 0.5 s **17/255 (6.7%)**. CI on this HEAD is green: [run 46160409572](https://github.com/burlakovmb/NOWA-Bio-Inspired-AI/actions/runs/46160409572), job 141026241686, **2396 passed, 12 skipped, 25 warnings**, 333.78 s, conclusion `success`. The six failures from run 46156597667 are in the passed set. Locally the updated colony tests and those six: **27 passed**, 5.46 s.
+
+One residual stays, minor: the bout reward is now the sum of ticks clipped to [-1, 1], and on the 1200 s run **162/255 bouts (63.5%)** land on that rail. It does flatten the magnitude of long bouts. It does not bring the deaths back. Readiness for this issue is yes, with that residual recorded below.
+
+### Coverage
+
+- scenarios: 9 passed / 0 failed / 0 not run
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | 120 s and 1200 s, seed 42, hold on | Pass. 120 s: 26 changes, eat median 22.25, drink 8.5, 0 deaths, minimum energy 0.965. 1200 s: 0 deaths, 17/255 ≤ 0.5 s, minimum energy 0.7225, 0 births |
+| 2 | Hold off, 1200 s, same seed | Pass. 19200 brain steps, 10757 action changes, 0 deaths, 0 births, minimum energy 0.7938 |
+| 3 | Bands, both needs, and the next tick | Pass. Drink held at hunger = thirst = 0.70 (hold left 39.50 s). Eat held at hunger 0.70, thirst 0.40. Eat cut when both are 0.70. A `play` hold at thirst 0.60 is cut; the next tick is `hide` (decided `hide`, source empty), which is the hide exception |
+| 4 | `dt` 0.1 vs 0.25 | Pass via `test_action_hold.py` (the 60 s comparison is in the 27). A free 60 s colony was not repeated |
+| 5 | Save/load closes with neuromodulator `dt=0` | Pass via `test_restored_hold_closes_with_zero_neuromodulator_dt` |
+| 6 | Loader: ≤ 0 and min > max | Pass. Eat and drink fall back to (10, 30). Groom swapped from [30, 10] to (10, 30). Warnings, one each: `non-positive action duration ignored; fallback (10, 30) s` and `action duration min>max swapped` |
+| 7 | `python3 -m colony_gui --headless --agents 4 --duration 2` | Pass. Exit 0, `sim_time=00:00:02`, 4 agents. That command is `run_headless_ticks` |
+| 8 | `git diff main -- src/` | Pass. 0 bytes |
+| 9 | DoD, existing tests green | Pass. CI 2396 passed, 0 failed |
+
+### What changed, measured again
+
+120 s, hold on, seed 42, `dt=0.25`, 4 agents. Changes **26** (the first pass had 46, before drink and eat could be held through the other band). Bouts 26, one of them ≤ 0.5 s. Births 0. Energies 0.9875, 0.965, 1.0, 0.9775. Completed medians inside the dataset ranges: drink 8.5 (n=5, 4–10), eat 22.25 (n=2, 8–60), explore 16.125, groom_self 26.75, play 38.25, rest 30, socialize 13.75.
+
+1200 s, same setup. Changes 233, bouts 255, brain steps 259, births 0, deaths 0. Energies 0.8075, 0.7225, 0.7725, 0.85. Completed medians inside the ranges: drink 7.5 (n=47), eat 39.5 (n=33), explore 16.25, groom_self 14.0, hide 32.125 (n=2), play 17.75, rest 33.0, socialize 12.75. `run_wheel` has reward rows (n=10) and no completed line, so those bouts were interrupted.
+
+1200 s, hold off. 0 deaths, 0 births. The missing births in the 4-agent colony are there with the hold off as well. The K01 pair (seed 11, the PR-36 courtship setup) with the hold on is pregnant at **step 108**, offspring at step 109, alive, energy 0.949, hunger 0.581, thirst 0.104. With the hold off the same pair is pregnant at step 2 and gives birth at step 3. The hold delays that pair. It does not kill her.
+
+Bands, single agent. Drink at hunger 0.70 and thirst 0.70: not interrupted, action `drink`, hold 39.50 s. Eat at hunger 0.70 and thirst 0.40: not interrupted, action `eat`. Eat at both 0.70: interrupted, hold 0. Thirst wins when both bands are open.
+
+### Body choice inside the penalty band
+
+This is past the issue text. The issue has the brain choose the action and the body hold it. `_penalty_service_action` replaces a free agent's choice while a need is in band: thirst ≥ 0.58 selects `drink`, otherwise hunger ≥ 0.60 selects `eat`. A locked `rest` policy (`replaced_policy_action` set), `hide`, `flee`, `sleep`, and a walk that just hit the 15 s timeout are left alone.
+
+On the 1200 s run, 259 decisions opened a hold. 74 of them were inside a band. **51 (19.7% of 259)** executed drink or eat because the body replaced a different brain choice. 6 had already been chosen by the brain. 17 stayed `hide` (10) or `sleep` (7). Of the 51 replacements, 50 were then tagged `homeostatic:travel_drink` or `homeostatic:travel_eat` (the bowl or the bottle was not under the agent). One finished bout kept `homeostatic:penalty_eat`. Counting the source string `homeostatic:penalty_*` therefore undercounts the body by 50. At most 4 holds are still open at 1200 s, so at least 47 of those 51 are closed bouts.
+
+`commit_executed_transition` writes the labile update on the executed action. The rejected brain choice is stored as `decided_action` and is not the action that receives the reward. The episode stays honest about the override. The policy is not trained down on the choice the body discarded.
+
+Judgment: acceptable as a body reflex scoped to the band that already spends energy at a lethal rate (from thirst 0.58 and energy 1.0, energy hits 0.05 in 38 s). It is the same shape as the existing homeostatic override. The interrupt leaves the brain's next choice in place; the band reflex is what selects drink. It does substitute the motor choice, and the learning target, on about one decision in five in this run. Locked rest still dies (the K01 rest pair is still judged on 40 s and stays not pregnant; `core.energy > 0.5` still holds). Widening the replacement past this band would be a rule standing in for the policy. Inside the band, with the exceptions and the stored decision, it can ship.
+
+### Bout reward
+
+`_finish_action_hold` commits `max(-1, min(1, reward_sum))`. The per-tick reward is already in [-1, 1]. A long bout therefore piles up past the rail and the clip throws the magnitude away.
+
+1200 s, 255 bouts. Raw sum: min **-11.406**, median **-1.072**, max **8.560**. Clipped onto ±1: **162/255 (63.5%)**. By action, rail count / n, raw median, clipped median:
+
+| Action | n | On ±1 | Raw median | Clipped median |
+| --- | --- | --- | --- | --- |
+| drink | 47 | 27 | -2.253 | -1 |
+| eat | 42 | 29 | -1.906 | -1 |
+| explore | 20 | 9 | -0.868 | -0.868 |
+| groom_self | 21 | 13 | -1.231 | -1 |
+| hide | 27 | 14 | -1.046 | -1 |
+| play | 20 | 18 | 1.834 | 1 |
+| rest | 39 | 27 | -3.404 | -1 |
+| run_wheel | 10 | 7 | -2.291 | -1 |
+| socialize | 29 | 18 | 1.670 | 1 |
+
+A typical eat and a typical rest both commit -1. A typical play and a typical socialize both commit +1. The comment on the sum says a mean washes out a one-tick relief across a long eat or drink. For eat and drink the raw median is already past -1, so the relief did not dominate the accumulated per-tick cost, and the clip then erases how far past the rail the bout went. Short bouts still keep a magnitude (explore's median is unclipped). The 120 s run is already 13/26 (50%) on the rail; its two completed eats are not (raw median -0.014). The scripted eat in `test_colony_episode_follows_executed_outcome_not_pre_action_choice` still asserts reward > 0.35, and that test passed, so a short eat at the bowl still carries the relief.
+
+### Tests, and whether the windows still mean something
+
+The waits grew. The asserts still name the event.
+
+- `test_knowledge.py`: the meeting loop is 150 ticks of 1 s (was 60). Familiarity > 0.1, relationship `acquaintance`, and a `sniff_greet` episode are still required. A greet that never happens still fails.
+- `test_k01_colony_ablation.py` and `test_qa_pr36_colony_core.py`: the core courtship loop is 160 steps (was 40). The rest pair is still stepped only for the first 40, and must still finish not pregnant with an empty birth list. Birth names and `physiology_as_policy` are unchanged. `core.energy > 0.5` is unchanged.
+- Episode tests wait until `hippocampus.experiences` (limits 120 s and 180 s) and then check the same fields: action, `overridden`, `decided_action`, and for the eat episode reward > 0.35. An empty hippocampus still fails. `test_k02` dropped the post-wait `current_action == eat`, which is right once the episode is committed at the end of the bout; the episode action is still `eat`.
+- `test_action_hold.py` adds both bands, the non-positive and swapped loader, the restored hold closing at neuromodulator `dt=0`, and the 1200 s survival check (0 deaths, 4 alive, minimum energy > 0.05, share of bouts ≤ 0.5 s below 0.25). The measured share is 0.067, so the bound still fails a return of the half-second mass.
+
+### Residual defect
+
+#### [MINOR] The clipped sum makes long bouts the same reward
+
+- **Steps**: 1) Run 4 agents, seed 42, `dt=0.25`, hold on, for 1200 s. 2) Sum the per-tick rewards of each bout and compare the sum with the value committed after the clip.
+- **Expected**: One transition per bout, and a long eat or drink still distinguishable from a long rest or from each other.
+- **Fact**: 162 of 255 committed rewards are exactly ±1. Eat raw median -1.906 and rest raw median -3.404 both commit -1. Play raw median 1.834 and socialize raw median 1.670 both commit +1. The sign of a short bout survives. The magnitude of a long one does not.
+- **Where**: `ChinchillaAgent._finish_action_hold` (`Demo/Colony chinchillas/src/colony_agent.py`).
+- **Severity**: minor
+
+### Recommendations
+
+1. Leave the band rule as it is: drink is held while thirst ≥ 0.58, eat is held while hunger ≥ 0.60 and thirst is below its band, and both bands keep drink. The body replacement inside that band can stay, with the rest lock, hide, flee, sleep, and the travel timeout left alone.
+2. The reward clip is the follow-up. A sum that is not forced onto [-1, 1], or a relief tick kept separate from the accumulated per-tick cost, would let a long eat differ from a long rest. The deaths do not depend on this.
+3. If a later pass wants the brain to learn the band itself, the rejected `decided_action` needs its own update. Today the labile write follows the executed drink or eat.
+
+### Readiness
+
+**Yes.** CI is green, `src/` is untouched, the 1200 s colony stays alive, and the half-second mass is 6.7%. The reward clip is a minor residual, not a blocker for this issue.
