@@ -169,6 +169,10 @@ def test_colony_override_credits_hide_not_the_rest_choice():
     agent.register_action_channel("hide", go_weight=0.5, nogo_weight=0.4, habit_strength=0.0)
     agent.sim_step(0.1)
     assert agent.current_action == "hide"
+    spent = 0.0
+    while not agent.hippocampus.experiences and spent < 180.0:
+        agent.sim_step(0.1)
+        spent += 0.1
     exp = agent.hippocampus.experiences[-1]
     assert exp.replay_action_id == "hide"
     assert exp.decided_action == "rest"
@@ -212,6 +216,10 @@ def test_reward_ignores_valence_and_is_scored_after_the_action():
     fed.sim_step(0.1)
     assert fed.current_action == "eat"
     assert fed.hunger < before
+    spent = 0.0
+    while not fed.hippocampus.experiences and spent < 120.0:
+        fed.sim_step(0.1)
+        spent += 0.1
     exp = fed.hippocampus.experiences[-1]
     assert exp.replay_action_id == "eat"
     assert exp.decided_action == "rest"
@@ -492,12 +500,14 @@ def test_core_births_keep_generated_names_and_rest_does_not():
     core_f, core_m = pair(11, None)
     rest_f, rest_m = pair(11, "rest")
     births = []
-    for _ in range(40):
+    # Held bouts delay the first mount. Rest is still judged on the old 40 s window.
+    for step in range(160):
         if not core_f.pending_offspring_list:
             core_m.sim_step(1.0)
             core_f.sim_step(1.0)
-        rest_m.sim_step(1.0)
-        rest_f.sim_step(1.0)
+        if step < 40:
+            rest_m.sim_step(1.0)
+            rest_f.sim_step(1.0)
         if core_f.is_pregnant and core_f.gestation_timer > 2.0:
             core_f.gestation_timer = 1.0
         if core_f.pending_offspring_list and not births:

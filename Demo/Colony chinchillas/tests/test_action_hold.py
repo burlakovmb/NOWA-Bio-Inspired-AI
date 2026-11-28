@@ -197,6 +197,68 @@ def test_penalty_band_need_interrupts_a_hold_before_energy_runs_out() -> None:
     assert agent._hold_end_reason == "interrupted"
 
 
+def _arm_action(agent: ChinchillaAgent, action: str) -> None:
+    agent.replaced_policy_action = action
+    agent.wakefulness.wakefulness = 0.1
+    agent.hunger = 0.2
+    agent.thirst = 0.2
+    agent.sim_step(0.25)
+    agent.replaced_policy_action = None
+    assert agent.current_action == action
+    assert agent._action_hold_s > 1.0
+
+
+def test_both_need_bands_keep_the_worse_drive() -> None:
+    """Thirst spends energy faster, so a drink hold survives both bands."""
+    drinking = _ready(12)
+    _arm_action(drinking, "drink")
+    drinking.hunger = 0.70
+    drinking.thirst = 0.70
+    drinking.sim_step(0.25)
+    assert drinking._hold_end_reason != "interrupted"
+    assert drinking.current_action == "drink"
+    assert drinking._action_hold_s > 0.0
+
+    eating = _ready(13)
+    _arm_action(eating, "eat")
+    eating.hunger = 0.70
+    eating.thirst = 0.40
+    eating.sim_step(0.25)
+    assert eating._hold_end_reason != "interrupted"
+    assert eating.current_action == "eat"
+
+    both = _ready(14)
+    _arm_action(both, "eat")
+    both.hunger = 0.70
+    both.thirst = 0.70
+    both.sim_step(0.25)
+    assert both._hold_end_reason == "interrupted"
+    assert both._action_hold_s == 0.0
+
+
+def test_loader_rejects_non_positive_and_warns_on_swap(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    payload = [
+        {"intent_type": "eat_pellets", "output": {"duration": [0, 0]}},
+        {"intent_type": "eat_hay", "output": {"duration": [-4, -1]}},
+        {"intent_type": "drink_water", "output": {"duration": [-2, 5]}},
+        {"intent_type": "groom_body", "output": {"duration": [30, 10]}},
+    ]
+    (tmp_path / "bad.json").write_text(json.dumps(payload), encoding="utf-8")
+    caplog.set_level(logging.WARNING)
+    table = load_action_durations(tmp_path, ("bad.json",))
+    assert table.range_for("eat") == FALLBACK_DURATION_S
+    assert table.range_for("drink") == FALLBACK_DURATION_S
+    assert table.range_for("groom_self") == (10.0, 30.0)
+    messages = [record.message for record in caplog.records]
+    assert any("non-positive" in message and "fallback" in message for message in messages)
+    assert any("swapped" in message for message in messages)
+    assert sum("non-positive" in message for message in messages) == 1
+    assert sum("swapped" in message for message in messages) == 1
+
+
 def test_save_load_keeps_active_hold(tmp_path: Path) -> None:
     runner = SimulationRunner(seed=8)
     agent = ChinchillaAgent(sex="F", rng_seed=8, name="Holder", agent_id="hold-save")
@@ -242,6 +304,59 @@ def test_save_load_keeps_active_hold(tmp_path: Path) -> None:
     assert loaded._action_hold_s == pytest.approx(12.25)
 
 
+def test_restored_hold_closes_with_zero_neuromodulator_dt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(colony_agent_module, "sample_action_duration", lambda _action, _rng: 1.0)
+
+    def _spy(agent: ChinchillaAgent, seen: list[float]) -> None:
+        original = agent.neuromodulators.update_from_signals
+
+        def wrapped(*args, **kwargs):
+            seen.append(float(kwargs["dt"]))
+            return original(*args, **kwargs)
+
+        agent.neuromodulators.update_from_signals = wrapped  # type: ignore[method-assign]
+
+    def _finish(agent: ChinchillaAgent) -> None:
+        agent.hunger = 0.2
+        agent.thirst = 0.2
+        agent.wakefulness.wakefulness = 0.1
+        for _ in range(8):
+            agent.sim_step(0.25)
+            if agent.hippocampus.experiences:
+                return
+
+    live = _ready(15)
+    live.replaced_policy_action = "play"
+    live_seen: list[float] = []
+    _spy(live, live_seen)
+    live.sim_step(0.25)
+    assert live._action_hold_s > 0.0
+    _finish(live)
+    assert live.hippocampus.experiences
+    assert live_seen[-1] == pytest.approx(0.0)
+
+    runner = SimulationRunner(seed=16)
+    agent = ChinchillaAgent(sex="F", rng_seed=16, name="NM", agent_id="nm-1")
+    runner.add_agent(agent)
+    agent.replaced_policy_action = "play"
+    agent.hunger = 0.2
+    agent.thirst = 0.2
+    agent.wakefulness.wakefulness = 0.1
+    agent.sim_step(0.25)
+    assert agent._action_hold_s > 0.0
+    storage = ColonyStorage(save_dir=tmp_path)
+    path = storage.save_colony(runner, "nm.json")
+    loaded = storage.load_colony(path).agents[0]
+    loaded_seen: list[float] = []
+    _spy(loaded, loaded_seen)
+    _finish(loaded)
+    assert loaded.hippocampus.experiences
+    assert loaded_seen[-1] == pytest.approx(0.0)
+
+
 def _measure(seed: int, duration_s: float, dt: float, *, action_hold: bool) -> dict:
     """Completed bouts plus raw current_action changes, scout-style."""
     bouts: list[tuple[str, float, bool]] = []
@@ -283,12 +398,36 @@ def _measure(seed: int, duration_s: float, dt: float, *, action_hold: bool) -> d
                     action_hold=action_hold,
                 )
             )
+        founder_ids = {agent.agent_id for agent in runner.agents}
         runner.run_for(duration_s, dt=dt)
+        living = [agent for agent in runner.agents if agent.agent_id in founder_ids]
+        energies = [float(agent.energy) for agent in living]
+        births = sum(1 for agent in runner.agents if agent.agent_id not in founder_ids)
+        deaths = len(founder_ids) - len(living)
+        alive = living
     finally:
         ChinchillaAgent._finish_action_hold = original_finish  # type: ignore[method-assign]
         ChinchillaAgent.sim_step = original_step  # type: ignore[method-assign]
         random.setstate(state)
-    return {"bouts": bouts, "changes": changes["n"]}
+    return {
+        "bouts": bouts,
+        "changes": changes["n"],
+        "alive": len(alive),
+        "energies": energies,
+        "deaths": deaths,
+        "births": births,
+    }
+
+
+def test_seed42_1200s_founders_survive_without_half_second_flicker() -> None:
+    measured = _measure(42, 1200.0, 0.25, action_hold=True)
+    assert measured["deaths"] == 0
+    assert measured["alive"] == 4
+    assert min(measured["energies"]) > 0.05
+    bouts = measured["bouts"]
+    assert bouts
+    short = sum(1 for _action, duration, _cut in bouts if duration <= 0.5 + 1e-9)
+    assert short / len(bouts) < 0.25
 
 
 def test_headless_eat_median_and_dataset_ranges() -> None:

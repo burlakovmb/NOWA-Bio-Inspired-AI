@@ -77,21 +77,27 @@ def _dataset_dirs() -> tuple[Path, ...]:
     )
 
 
-def _as_range(value: Any) -> tuple[float, float] | None:
+def _parse_duration(value: Any) -> tuple[tuple[float, float] | None, str | None]:
+    """``(range, note)``. Note is ``swap`` or ``non_positive``.
+
+    Non-positive bounds are dropped. ``min > max`` is swapped and kept.
+    """
     if not isinstance(value, (list, tuple)) or len(value) != 2:
-        return None
+        return None, None
     try:
         low = float(value[0])
         high = float(value[1])
     except (TypeError, ValueError):
-        return None
+        return None, None
     if not (low == low and high == high):
-        return None
+        return None, None
     if low in (float("inf"), float("-inf")) or high in (float("inf"), float("-inf")):
-        return None
+        return None, None
+    if low <= 0.0 or high <= 0.0:
+        return None, "non_positive"
     if high < low:
-        low, high = high, low
-    return (low, high)
+        return (high, low), "swap"
+    return (low, high), None
 
 
 def _union(ranges: list[tuple[float, float]]) -> tuple[float, float] | None:
@@ -109,22 +115,36 @@ class ActionDurationTable:
         social_ranges: dict[str, tuple[float, float]],
         *,
         missing_files: tuple[str, ...] = (),
+        notes: tuple[str, ...] = (),
     ) -> None:
         self.intent_ranges = dict(intent_ranges)
         self.social_ranges = dict(social_ranges)
         self.missing_files = tuple(missing_files)
-        self._warned = False
+        self._warned_fallback = False
+        self._warned_swap = False
         if missing_files:
-            self._warn_once(
+            self._warn_fallback(
                 "action duration dataset missing (%s); fallback (10, 30) s"
                 % ", ".join(missing_files)
             )
+        if "non_positive" in notes:
+            self._warn_fallback(
+                "non-positive action duration ignored; fallback (10, 30) s"
+            )
+        if "swap" in notes:
+            self._warn_swap()
 
-    def _warn_once(self, message: str) -> None:
-        if self._warned:
+    def _warn_fallback(self, message: str) -> None:
+        if self._warned_fallback:
             return
-        self._warned = True
+        self._warned_fallback = True
         logger.warning(message)
+
+    def _warn_swap(self) -> None:
+        if self._warned_swap:
+            return
+        self._warned_swap = True
+        logger.warning("action duration min>max swapped")
 
     def range_for(self, action: str) -> tuple[float, float]:
         """``(min, max)`` seconds. Fallback ``(10, 30)`` logs one warning."""
@@ -140,7 +160,7 @@ class ActionDurationTable:
                 return union
         if name in self.intent_ranges:
             return self.intent_ranges[name]
-        self._warn_once(
+        self._warn_fallback(
             "no dataset duration for action %r; fallback (10, 30) s" % (name or "?",)
         )
         return FALLBACK_DURATION_S
@@ -162,6 +182,7 @@ def _read_json(path: Path) -> list[dict[str, Any]]:
 def _accumulate(
     rows: list[dict[str, Any]],
     into: dict[str, list[tuple[float, float]]],
+    notes: set[str],
 ) -> None:
     for row in rows:
         intent = str(row.get("intent_type") or "").strip()
@@ -170,7 +191,9 @@ def _accumulate(
         output = row.get("output")
         if not isinstance(output, dict):
             output = row
-        parsed = _as_range(output.get("duration"))
+        parsed, note = _parse_duration(output.get("duration"))
+        if note:
+            notes.add(note)
         if parsed is None:
             continue
         into.setdefault(intent, []).append(parsed)
@@ -212,6 +235,7 @@ def load_action_durations(
     intent_bucket: dict[str, list[tuple[float, float]]] = {}
     social_bucket: dict[str, list[tuple[float, float]]] = {}
     missing: list[str] = []
+    notes: set[str] = set()
     for name in names:
         found: Path | None = None
         for directory in search_dirs:
@@ -227,9 +251,9 @@ def load_action_durations(
         except (OSError, json.JSONDecodeError):
             missing.append(name)
             continue
-        _accumulate(rows, intent_bucket)
+        _accumulate(rows, intent_bucket, notes)
         if Path(name).name == SOCIAL_DATASET_NAME:
-            _accumulate(rows, social_bucket)
+            _accumulate(rows, social_bucket, notes)
     intent_ranges = {
         key: union
         for key, values in intent_bucket.items()
@@ -244,6 +268,7 @@ def load_action_durations(
         intent_ranges,
         social_ranges,
         missing_files=tuple(missing),
+        notes=tuple(sorted(notes)),
     )
 
 

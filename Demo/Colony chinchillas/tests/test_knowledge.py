@@ -25,9 +25,9 @@ def test_tc02_first_meeting_of_strangers() -> None:
     runner.add_agent(a0)
     runner.add_agent(a1)
 
-    # The test checks the first meeting, not wandering. A held action
-    # occupies the first bout, so the greet lands after that bout.
-    for _ in range(60):
+    # The test checks the first meeting, not wandering. Held bouts and a
+    # drink while thirst is in the penalty band delay the greet past 60 s.
+    for _ in range(150):
         a0._set_position("floor")
         a1._set_position("floor")
         runner.tick(1.0)

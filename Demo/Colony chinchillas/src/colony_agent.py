@@ -667,14 +667,33 @@ class ChinchillaAgent(Agent):
             return "forced_sleep"
         hunger = _clamp(self.hunger, 0.0, 1.0)
         thirst = _clamp(self.thirst, 0.0, 1.0)
-        # The configured threshold (default 0.9) is the critical-drive gate.
-        # The unmet-need penalty starts much lower and spends energy fast
-        # enough to kill the animal before a drive reaches 0.9, so a hold
-        # also yields when hunger or thirst enters that penalty band.
-        if current != "eat" and (hunger > threshold or hunger >= HUNGER_NEED_THRESHOLD):
-            return "drive:hunger"
-        if current != "drink" and (thirst > threshold or thirst >= THIRST_NEED_THRESHOLD):
+        return self._drive_interrupt_reason(current, hunger, thirst, threshold)
+
+    def _drive_interrupt_reason(
+        self,
+        current: str,
+        hunger: float,
+        thirst: float,
+        threshold: float,
+    ) -> str | None:
+        """Yield a hold that is not serving the need currently spending energy.
+
+        The 0.9 gate is the critical drive. The unmet-need penalty starts at
+        0.60 / 0.58 and reaches lethal energy before either drive hits 0.9, so
+        those bands yield too. A band does not cut the action that relieves it.
+        Thirst spends energy faster than hunger, so when both bands are open
+        the hold that stays is drink.
+        """
+        hunger_hot = hunger > threshold or hunger >= HUNGER_NEED_THRESHOLD
+        thirst_hot = thirst > threshold or thirst >= THIRST_NEED_THRESHOLD
+        if thirst_hot and hunger_hot:
+            if current == "drink":
+                return None
             return "drive:thirst"
+        if thirst_hot and current != "drink":
+            return "drive:thirst"
+        if hunger_hot and current != "eat":
+            return "drive:hunger"
         return None
 
     def _sleep_hold_broken(self) -> bool:
@@ -738,8 +757,9 @@ class ChinchillaAgent(Agent):
             self._hold_reward_sum = 0.0
             self._hold_reward_n = 0
             return
-        count = max(1, int(self._hold_reward_n))
-        reward = float(self._hold_reward_sum) / float(count)
+        # Sum of the bout, clamped. A mean washes out a one-tick relief
+        # across a long eat or drink. One transition still closes the bout.
+        reward = max(-1.0, min(1.0, float(self._hold_reward_sum)))
         self._hold_reward_sum = 0.0
         self._hold_reward_n = 0
         decided = commit.get("decided")
@@ -866,6 +886,10 @@ class ChinchillaAgent(Agent):
                 affective_inputs=commit_affect,
             )
             return
+        # Affect for this bout is advanced per tick. The closing commit must
+        # use that host interval (already zeroed) and not the legacy 1 s step
+        # that applies when the brain was not asked, or after save/load.
+        self._nm_use_host_dt = True
         visible = str(self.current_action or executed or "idle")
         source = override_source
         if visible != str(executed or "") and not source:
@@ -996,6 +1020,18 @@ class ChinchillaAgent(Agent):
                 "intensity": 1.0,
                 "affect": None,
             }
+        if self._hold_commit is not None or self._action_hold_s > 0.0:
+            # The core pending context and host-dt flag are not in the save.
+            # A live closing commit already zeroed the affect interval and
+            # integrates neuromodulators with dt 0. Do the same after load,
+            # instead of the legacy 1 s step used when the flag is absent.
+            self._nm_use_host_dt = True
+            pending = getattr(self, "_pending_commit_context", None)
+            if not isinstance(pending, dict):
+                pending = {}
+                self._pending_commit_context = pending
+            pending["time_elapsed"] = 0.0
+            pending["step_elapsed"] = 0.0
 
     def sim_step(self, dt: float) -> None:
         self.sim_time += dt
@@ -1351,10 +1387,32 @@ class ChinchillaAgent(Agent):
             self._reflex_last_activation.clear()
             self._reflex_last_activation.update(cooldown_before)
             reflex_action, reflex_id = None, None
+        # Unmet thirst raises stress, and panic_hide would cancel the drink
+        # the penalty band is about to start. Alarm still hides.
+        served = self._penalty_service_action()
+        if (
+            served
+            and reflex_action in {"hide", "flee"}
+            and self._reflex_matched_only(reflex_id, events, frozenset({"high_stress"}))
+        ):
+            self._reflex_last_activation.clear()
+            self._reflex_last_activation.update(cooldown_before)
+            reflex_action, reflex_id = None, None
         if reflex_action is not None and reflex_action != action:
             action = reflex_action
             overridden = True
             source = f"reflex:{reflex_id}" if reflex_id else "reflex"
+        timed_out = self._travel_action if self._travel_timed_out() else None
+        if served and served != timed_out and action not in {"hide", "flee", "sleep"} and action != served:
+            # The band is already spending lethal energy. Holding the brain's
+            # other choice just to interrupt it next tick never reaches the bowl.
+            # A walk that just timed out is not restarted on this same tick,
+            # and sleep is not replaced.
+            action = served
+            overridden = True
+            source = f"homeostatic:penalty_{served}"
+        if served and served != timed_out and self._travel_action not in {None, served}:
+            self._clear_travel_goal()
         if self.physiology_as_policy:
             gated = action
         else:
@@ -1390,6 +1448,43 @@ class ChinchillaAgent(Agent):
             if self._begin_travel(action):
                 return action, True, f"homeostatic:travel_{action}"
         return action, overridden, source
+
+    def _penalty_service_action(self) -> str | None:
+        """Drink or eat while a penalty band is open and the brain may act.
+
+        A replaced policy (the rest ablation) is left alone. Thirst spends
+        energy faster, so it wins when both bands are open. ``action_hold``
+        off keeps the per-tick body unchanged.
+        """
+        if not self.action_hold or not self.physiology_as_policy:
+            return None
+        if self.replaced_policy_action:
+            return None
+        hunger = _clamp(self.hunger, 0.0, 1.0)
+        thirst = _clamp(self.thirst, 0.0, 1.0)
+        threshold = float(self.action_hold_interrupt_threshold)
+        if thirst > threshold or thirst >= THIRST_NEED_THRESHOLD:
+            return "drink"
+        if hunger > threshold or hunger >= HUNGER_NEED_THRESHOLD:
+            return "eat"
+        return None
+
+    def _reflex_matched_only(
+        self,
+        reflex_id: str | None,
+        events: set[str],
+        only: frozenset[str],
+    ) -> bool:
+        if "alarm_call" in events:
+            return False
+        reflex = next(
+            (item for item in self.unconditioned_reflexes if item.reflex_id == reflex_id),
+            None,
+        )
+        if reflex is None:
+            return False
+        matched = (set(reflex.trigger_any) | set(reflex.trigger_all)) & set(events)
+        return matched == set(only)
 
     def _reflex_is_only_need_stress(
         self,

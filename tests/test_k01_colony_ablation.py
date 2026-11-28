@@ -26,6 +26,19 @@ from simulation_runner import SimulationRunner  # noqa: E402
 _NAME = re.compile(r"^G[0-9]+A[0-9]+S[MFU]$")
 _SURVIVAL_STEPS = 30
 _REPRO_STEPS = 40
+# A held action occupies the first bouts, so courtship lands later than one offer per tick.
+_CORE_REPRO_STEPS = 160
+
+
+def _episode_after_bout(agent: ChinchillaAgent, *, dt: float = 0.1, limit_s: float = 180.0):
+    spent = 0.0
+    while not agent.hippocampus.experiences and spent < limit_s:
+        if agent.mortality_system.is_dead():
+            break
+        agent.sim_step(dt)
+        spent += dt
+    assert agent.hippocampus.experiences, "the bout did not commit an episode"
+    return agent.hippocampus.experiences[-1]
 
 
 def _survival_agent(seed: int, policy: str | None) -> ChinchillaAgent:
@@ -190,7 +203,7 @@ def test_policy_mode_does_not_force_eat_and_still_reports_reflexes() -> None:
     alarmed.affective_space.axes["stress"] = 0.95
     alarmed.sim_step(0.1)
     assert alarmed.current_action == "hide"
-    episode = alarmed.hippocampus.experiences[-1]
+    episode = _episode_after_bout(alarmed)
     assert bool(getattr(episode, "overridden", False)) is True
     assert str(getattr(episode, "override_source", "")).startswith("reflex:")
 
@@ -213,12 +226,13 @@ def test_rest_policy_loses_survival_and_reproduction_to_the_core() -> None:
     core_female, core_male = _pair(11, None)
     rest_female, rest_male = _pair(11, "rest")
     core_births = 0
-    for _ in range(_REPRO_STEPS):
+    for step in range(_CORE_REPRO_STEPS):
         if not core_female.pending_offspring_list:
             core_male.sim_step(1.0)
             core_female.sim_step(1.0)
-        rest_male.sim_step(1.0)
-        rest_female.sim_step(1.0)
+        if step < _REPRO_STEPS:
+            rest_male.sim_step(1.0)
+            rest_female.sim_step(1.0)
         if core_female.is_pregnant and core_female.gestation_timer > 2.0:
             # Product gestation stays 300s. This only lets the test see a birth.
             core_female.gestation_timer = 1.0
