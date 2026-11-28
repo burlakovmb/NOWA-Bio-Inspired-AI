@@ -2,6 +2,29 @@
 
 English version: [CHANGELOG.en.md](CHANGELOG.en.md)
 
+## 2026-11-28 — Virtual company: доменно-нейтральный сценарий песочницы (issue #96)
+
+Документация для разработчика по слою `Scenario` / `ScenarioTrainer` и фасаду `SandboxTrainer` с обратной совместимостью. Поведение закупщика в CLI, GUI и YAML по умолчанию без изменений.
+
+Обновлённые файлы:
+
+- `Docs/specs/issue-96-sandbox-scenario.en.md` (новый)
+- `Docs/specs/issue-96-sandbox-scenario.ru.md` (новый)
+- `Demo/Virtual company/README.en.md`, `README.ru.md`
+- `Demo/Virtual company/Docs/SCIENTIFIC_DESCRIPTION.en.md`, `SCIENTIFIC_DESCRIPTION.ru.md`
+- `Demo/Virtual company/Docs/NOWA_Procurement_Sandbox_Spec.en.md` (заметка as-built)
+
+Зафиксировано в текстах:
+
+- контракт `Scenario` и порядок дня в `ScenarioTrainer._run_single_quarter`
+- `NumericMemory`, выпуск через `stage_mechanics`, необязательный YAML `scenario:`
+- образец логистики в `tests/logistics_scenario.py`
+- golden gate: `tools/golden_issue_96.py`, пересъёмка фикстур, требование ядрового агента
+
+Отчёт QA: `Docs/qa/issue-96-scenario.*.md` (не переписывался).
+
+---
+
 ## 2026-09-27 — Научное изложение на двух языках
 
 Обновлены входные документы и научные описания установок. В `README.md` сначала идёт английский текст, затем русский. Остальные научные тексты разведены по файлам `*.en.md` и `*.ru.md`, так что ссылка остаётся в выбранном языке.

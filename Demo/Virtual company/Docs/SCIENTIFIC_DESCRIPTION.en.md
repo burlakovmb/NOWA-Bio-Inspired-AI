@@ -18,6 +18,8 @@ The agent is a sovereign unit: its own memory, its own affective space, and the 
 
 The world sets demand, deliveries, holding costs, supplier defaults, and bankruptcy. The encoder passes categorical context tokens to the agent; the world object is not passed. The call `agent.step` runs in decision mode. Concrete product, supplier, and quantity are resolved by `ProcurementMotorAdapter` — the body of the strategy in this sandbox, distinct from the universal schema binder of the protocol body. After the outcome is known, the episode is stored. World physics advances by `world.tick`. Learning occurs in the call `sleep_cycle` with period `sleep_every_n_days`.
 
+Since issue #96 the day and quarter loops live in `scenario_trainer.py` against the `Scenario` protocol; the buyer plugin is `ProcurementScenario`, and `SandboxTrainer` keeps the previous public API. Generic modules must stay free of procurement vocabulary. Developer guide: [issue-96-sandbox-scenario.en.md](../../../Docs/specs/issue-96-sandbox-scenario.en.md).
+
 A quarter builds a new world from the seed `base_seed + quarter - 1`. The agent's state is what carries across quarters.
 
 The curriculum has two stages. Stage 1a rotates suppliers every quarter and gates graduation on criteria that do not depend on supplier identity. Stage 1b keeps the supplier roster and gates graduation on the criteria that do depend on it, with a guard against regression relative to the typical level of Stage 1a. Graduation from Stage 1b requires a run of consecutive quarters that pass the threshold and the guard. The Stage 1a baseline is the median of quarters, with a floor that takes the interquartile range into account. World configuration bounds structurally infeasible quarters (lead time, demand, stock).

@@ -4,6 +4,8 @@ Russian version: [README.ru.md](README.ru.md)
 
 The platform contains a procurement sandbox and a protocol body with an employee host. The contours do not import one another. Scientific account, invariants, curriculum, laboratory observations, and commands: [Docs/SCIENTIFIC_DESCRIPTION.en.md](Docs/SCIENTIFIC_DESCRIPTION.en.md). Account of the complex: [Docs/SCIENTIFIC_DESCRIPTION.en.md](../../Docs/SCIENTIFIC_DESCRIPTION.en.md).
 
+The procurement buyer remains the default host. Training runs through `SandboxTrainer` in `training_loop.py`, which is a facade over the generic `ScenarioTrainer` and `ProcurementScenario`. CLI, GUI, curriculum, and the World tab are unchanged and do not read optional `scenario.name` from YAML. To plug in another simulated domain, see [Docs/specs/issue-96-sandbox-scenario.en.md](../../Docs/specs/issue-96-sandbox-scenario.en.md).
+
 Short sandbox launch from the platform directory:
 
 ```bash
