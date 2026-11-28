@@ -74,8 +74,12 @@ def test_tc05_hippocampus_accumulates_experience() -> None:
     agent.resources = SharedResources()
 
     initial_count = len(agent.hippocampus.experiences)
-    for _ in range(5):
+    # One episode per completed or interrupted bout. The longest mapped
+    # action that is not sleep is 80 s, and a rising need interrupts sooner.
+    for _ in range(1500):
         agent.sim_step(0.1)
+        if len(agent.hippocampus.experiences) > initial_count:
+            break
 
     assert len(agent.hippocampus.experiences) > initial_count
 

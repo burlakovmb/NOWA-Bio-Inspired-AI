@@ -42,6 +42,7 @@ from agent_knowledge import (
     PerceivedOther,
     PublicState,
 )
+from colony_action_durations import resolve_action_hold, sample_action_duration
 from config_colony import (
     COLONY_MAX_LIFESPAN_AGE_S,
     COLONY_MAX_LIFESPAN_STEPS,
@@ -289,6 +290,8 @@ class ChinchillaAgent(Agent):
         rng: random.Random | None = None,
         rng_seed: int | None = None,
         physiology_as_policy: bool | None = None,
+        action_hold: bool | None = None,
+        action_hold_interrupt_threshold: float | None = None,
         hippocampus_capacity: int = 1024,
         cortex_capacity: int = 128,
         genome: GenomeVector | None = None,
@@ -421,6 +424,12 @@ class ChinchillaAgent(Agent):
         self.physiology_as_policy: bool = (
             bool(PHYSIOLOGY_AS_POLICY) if physiology_as_policy is None else bool(physiology_as_policy)
         )
+        hold_enabled, hold_threshold = resolve_action_hold(
+            action_hold,
+            action_hold_interrupt_threshold,
+        )
+        self.action_hold: bool = hold_enabled
+        self.action_hold_interrupt_threshold: float = hold_threshold
         # Replaces the cognitive choice. None keeps the core. The ablation uses "rest".
         self.replaced_policy_action: str | None = None
         if rng is not None:
@@ -444,6 +453,21 @@ class ChinchillaAgent(Agent):
         self._resource_block_feedback_at: dict[str, float] = {}
         self._wheel_run_started_at: float | None = None
         self._exclusive_action_timer: float = 0.0
+        self._action_hold_s: float = 0.0
+        self._hold_commit: dict | None = None
+        self._hold_reward_sum: float = 0.0
+        self._hold_reward_n: int = 0
+        self._hold_started_at: float | None = None
+        self._hold_end_reason: str | None = None
+        self._suppress_hold_impulses: bool = False
+        self._sim_step_dt: float = 0.0
+        self._exclusive_offer_this_tick: bool = False
+        # Duration samples stay off the per-tick motor generator so a finer
+        # dt does not reshuffle the next bout length.
+        if rng_seed is not None:
+            self._duration_rng = random.Random(int(rng_seed) + 7919)
+        else:
+            self._duration_rng = random.Random()
         self._metabolism_tick: float = 0.0
         self._body_step_carry: float = 0.0
         # Forced sleep continues only after a bout opened by real need
@@ -592,6 +616,10 @@ class ChinchillaAgent(Agent):
         intensity: float = 0.5,
     ) -> None:
         """Apply affective impulse via NOWA AffectiveSpace."""
+        # A held bout already applied its impulse on the decision tick.
+        # Later ticks keep the motor pattern without stacking the impulse.
+        if getattr(self, "_suppress_hold_impulses", False):
+            return
         try:
             scale = _clamp(float(intensity), 0.0, 2.0)
             inputs: dict[str, float] = {}
@@ -615,8 +643,401 @@ class ChinchillaAgent(Agent):
         except Exception:
             pass
 
+    def _hold_interrupt_reason(self, context_events: list[str]) -> str | None:
+        """Danger, forced sleep, or a drive above the hold threshold."""
+        if not self.action_hold:
+            return None
+        events = set(context_events or [])
+        current = str(self.current_action or "")
+        threshold = float(self.action_hold_interrupt_threshold)
+        for reflex in self.unconditioned_reflexes:
+            if not reflex.override_exclusive or reflex.action == current:
+                continue
+            if reflex.trigger_any and events.isdisjoint(reflex.trigger_any):
+                continue
+            if reflex.trigger_all and not set(reflex.trigger_all).issubset(events):
+                continue
+            if reflex.cooldown_s > 0.0:
+                last_time = self._reflex_last_activation.get(reflex.reflex_id)
+                if last_time is not None and (self.sim_time - last_time) < reflex.cooldown_s:
+                    continue
+            return f"reflex:{reflex.reflex_id}"
+        wake = _clamp(float(self.wakefulness.wakefulness), 0.0, 1.0)
+        if current != "sleep" and (wake >= SLEEP_CRITICAL_THRESHOLD or wake > threshold):
+            return "forced_sleep"
+        hunger = _clamp(self.hunger, 0.0, 1.0)
+        thirst = _clamp(self.thirst, 0.0, 1.0)
+        return self._drive_interrupt_reason(current, hunger, thirst, threshold)
+
+    def _drive_interrupt_reason(
+        self,
+        current: str,
+        hunger: float,
+        thirst: float,
+        threshold: float,
+    ) -> str | None:
+        """Yield a hold that is not serving the need currently spending energy.
+
+        The 0.9 gate is the critical drive. The unmet-need penalty starts at
+        0.60 / 0.58 and reaches lethal energy before either drive hits 0.9, so
+        those bands yield too. A band does not cut the action that relieves it.
+        Thirst spends energy faster than hunger, so when both bands are open
+        the hold that stays is drink.
+        """
+        hunger_hot = hunger > threshold or hunger >= HUNGER_NEED_THRESHOLD
+        thirst_hot = thirst > threshold or thirst >= THIRST_NEED_THRESHOLD
+        if thirst_hot and hunger_hot:
+            if current == "drink":
+                return None
+            return "drive:thirst"
+        if thirst_hot and current != "drink":
+            return "drive:thirst"
+        if hunger_hot and current != "eat":
+            return "drive:hunger"
+        return None
+
+    def _sleep_hold_broken(self) -> bool:
+        commit = self._hold_commit
+        if not isinstance(commit, dict) or str(commit.get("action") or "") != "sleep":
+            return False
+        return (not self.is_sleeping) or self.current_action != "sleep"
+
+    def _continue_held_motor(self) -> None:
+        """Keep performing the held action without a new decision."""
+        action = str(self.current_action or "")
+        if not action or action in {"idle", "dead"}:
+            return
+        self._suppress_hold_impulses = True
+        try:
+            self._interpret_action(action)
+        finally:
+            self._suppress_hold_impulses = False
+
+    def _run_open_hold_body(self, dt: float, host_dt: float, *, motor: bool) -> None:
+        before = self._physiology_snapshot()
+        if self.resources is None:
+            water_before = pellets_before = hay_before = None
+        else:
+            water_before = float(self.resources.water)
+            pellets_before = float(self.resources.food_pellets)
+            hay_before = float(self.resources.hay)
+        if motor:
+            self._continue_held_motor()
+            self._finish_travel_goal(
+                str(self.current_action or ""),
+                water_before,
+                pellets_before,
+                hay_before,
+            )
+        self._social_step()
+        self._apply_sleep_recovery(dt)
+        reward = self._compute_reward(
+            before=before,
+            executed_action=str(self.current_action or "idle"),
+        )
+        self._hold_reward_sum += float(reward)
+        self._hold_reward_n += 1
+        self.advance_time(host_dt)
+        if self.is_sleeping and self._sleep_entered_by_need:
+            self._advance_affect_while_asleep(host_dt)
+        else:
+            self._advance_affect_while_awake(host_dt)
+        self._resource_metabolism_step(dt)
+        self._apply_unmet_need_cost(dt)
+        self._advance_autonomous_body(dt)
+        self._age_step(dt)
+
+    def _finish_action_hold(self, *, interrupted: bool) -> None:
+        """One transition for a bout that ended or was interrupted."""
+        commit = self._hold_commit
+        self._hold_commit = None
+        self._action_hold_s = 0.0
+        self._hold_end_reason = "interrupted" if interrupted else "completed"
+        if not isinstance(commit, dict):
+            self._hold_reward_sum = 0.0
+            self._hold_reward_n = 0
+            return
+        # Sum of the bout, clamped. A mean washes out a one-tick relief
+        # across a long eat or drink. One transition still closes the bout.
+        reward = max(-1.0, min(1.0, float(self._hold_reward_sum)))
+        self._hold_reward_sum = 0.0
+        self._hold_reward_n = 0
+        decided = commit.get("decided")
+        self.commit_executed_transition(
+            action=str(commit.get("action") or "idle"),
+            reward=reward,
+            context_events=list(commit.get("context") or []),
+            decided_action=None if decided is None else str(decided),
+            overridden=bool(commit.get("overridden")),
+            override_source=commit.get("source"),
+            novelty=float(commit.get("novelty") or 0.0),
+            conflict=float(commit.get("conflict") or 0.0),
+            intensity=float(commit.get("intensity") or 1.0),
+            affective_inputs=commit.get("affect"),
+        )
+
+    def _open_social_hold(self, context_events: list[str], dt: float) -> None:
+        """The exclusive social bout is the action being held."""
+        self._action_hold_s = 0.0
+        self._hold_end_reason = None
+        self._hold_started_at = float(self.sim_time) - float(dt)
+        self._hold_reward_sum = 0.0
+        self._hold_reward_n = 0
+        self._hold_commit = {
+            "action": str(self.current_action or "idle"),
+            "decided": None,
+            "overridden": True,
+            "source": "social_exclusive",
+            "context": list(context_events or []),
+            "novelty": 0.0,
+            "conflict": 0.0,
+            "intensity": 1.0,
+            "affect": None,
+        }
+
+    def _maintain_action_hold(
+        self,
+        dt: float,
+        host_dt: float,
+        context_events: list[str],
+        *,
+        was_social: bool,
+    ) -> bool:
+        """Tick a hold. True means this tick does not ask the brain."""
+        if not self.action_hold:
+            return False
+        brain = self._hold_commit is not None and self._action_hold_s > 0.0
+        social = bool(was_social or (self._exclusive_action_timer > 0.0 and self._hold_commit is not None))
+        manual_social = bool(was_social and self._hold_commit is None)
+        if not brain and not social and not manual_social:
+            return False
+
+        interrupted = self._sleep_hold_broken() or (
+            self._hold_interrupt_reason(context_events) is not None
+        )
+        if interrupted:
+            self._action_hold_s = 0.0
+            self._exclusive_action_timer = 0.0
+            self._run_open_hold_body(dt, host_dt, motor=False)
+            if self._hold_commit is not None:
+                self._finish_action_hold(interrupted=True)
+            else:
+                self._hold_end_reason = "interrupted"
+            return True
+
+        if brain and not was_social:
+            self._action_hold_s = max(0.0, float(self._action_hold_s) - float(dt))
+        self._run_open_hold_body(dt, host_dt, motor=True)
+        if self._hold_commit is None:
+            return True
+
+        held = str(self._hold_commit.get("action") or "")
+        if (
+            self._exclusive_action_timer > 0.0
+            and held
+            and self.current_action != held
+        ):
+            self._finish_action_hold(interrupted=True)
+            self._open_social_hold(context_events, dt)
+            return True
+        if (
+            self._sleep_hold_broken()
+            or self.current_action == "dead"
+            or (held and self.current_action != held and self._exclusive_action_timer <= 0.0)
+        ):
+            self._action_hold_s = 0.0
+            self._exclusive_action_timer = 0.0
+            self._finish_action_hold(interrupted=True)
+            return True
+        if was_social and self._exclusive_action_timer <= 0.0:
+            self._finish_action_hold(interrupted=False)
+            return True
+        if self._action_hold_s <= 0.0 and self._exclusive_action_timer <= 0.0 and brain:
+            self._finish_action_hold(interrupted=False)
+        return True
+
+    def _record_executed_action(
+        self,
+        *,
+        dt: float,
+        executed: str,
+        reward: float,
+        context_events: list[str],
+        decided_action: str | None,
+        overridden: bool,
+        override_source: str | None,
+        novelty: float,
+        conflict: float,
+        intensity: float,
+        commit_affect: dict | None,
+    ) -> None:
+        """Commit now, or keep the action and commit when the hold ends."""
+        if not self.action_hold or str(self.current_action or executed) == "dead":
+            self.commit_executed_transition(
+                action=executed,
+                reward=reward,
+                context_events=context_events,
+                decided_action=decided_action,
+                overridden=overridden,
+                override_source=override_source,
+                novelty=novelty,
+                conflict=conflict,
+                intensity=intensity,
+                affective_inputs=commit_affect,
+            )
+            return
+        # Affect for this bout is advanced per tick. The closing commit must
+        # use that host interval (already zeroed) and not the legacy 1 s step
+        # that applies when the brain was not asked, or after save/load.
+        self._nm_use_host_dt = True
+        visible = str(self.current_action or executed or "idle")
+        source = override_source
+        if visible != str(executed or "") and not source:
+            source = "body"
+        self._hold_end_reason = None
+        self._hold_started_at = float(self.sim_time) - float(dt)
+        self._hold_reward_sum = float(reward)
+        self._hold_reward_n = 1
+        self._hold_commit = {
+            "action": visible,
+            "decided": decided_action,
+            "overridden": bool(overridden) or visible != str(executed or ""),
+            "source": source,
+            "context": list(context_events or []),
+            "novelty": float(novelty),
+            "conflict": float(conflict),
+            "intensity": float(intensity),
+            "affect": commit_affect,
+        }
+        if commit_affect is None:
+            # decision_only does not move affect. The bout's ticks do.
+            self._advance_affect_while_awake(dt)
+        if self._exclusive_action_timer > 0.0 or self._exclusive_offer_this_tick:
+            self._action_hold_s = 0.0
+            if self._exclusive_action_timer <= 0.0:
+                self._finish_action_hold(interrupted=False)
+            return
+        sampled = sample_action_duration(visible, self._duration_rng)
+        remaining = float(sampled) - float(dt)
+        if remaining <= 1e-9:
+            self._action_hold_s = 0.0
+            self._finish_action_hold(interrupted=False)
+            return
+        self._action_hold_s = remaining
+
+    def _begin_exclusive_offer(self, offer_type: str) -> None:
+        meta = SOCIAL_OFFER_TYPES.get(offer_type)
+        if not meta or not meta.exclusive:
+            return
+        self.current_action = offer_type
+        self._exclusive_offer_this_tick = True
+        if self.action_hold:
+            sampled = sample_action_duration(offer_type, self._duration_rng)
+            spent = float(self._sim_step_dt or 0.0)
+            duration = max(0.0, float(sampled) - spent)
+        else:
+            duration = float(meta.duration)
+        self._exclusive_action_timer = max(float(self._exclusive_action_timer), duration)
+
+    def export_action_hold(self) -> dict:
+        commit = self._hold_commit if isinstance(self._hold_commit, dict) else None
+        affect = commit.get("affect") if commit else None
+        return {
+            "action_hold_s": float(self._action_hold_s),
+            "hold_reward_sum": float(self._hold_reward_sum),
+            "hold_reward_n": int(self._hold_reward_n),
+            "hold_started_at": self._hold_started_at,
+            "hold_commit": None
+            if commit is None
+            else {
+                "action": commit.get("action"),
+                "decided": commit.get("decided"),
+                "overridden": bool(commit.get("overridden")),
+                "source": commit.get("source"),
+                "context": list(commit.get("context") or []),
+                "novelty": float(commit.get("novelty") or 0.0),
+                "conflict": float(commit.get("conflict") or 0.0),
+                "intensity": float(commit.get("intensity") or 1.0),
+                "affect": dict(affect) if isinstance(affect, dict) else None,
+            },
+        }
+
+    def restore_action_hold(self, payload: dict | None) -> None:
+        """Carry a remaining hold, or leave it cleared when the save has none."""
+        self._action_hold_s = 0.0
+        self._hold_commit = None
+        self._hold_reward_sum = 0.0
+        self._hold_reward_n = 0
+        self._hold_started_at = None
+        self._hold_end_reason = None
+        if not isinstance(payload, dict) or "action_hold_s" not in payload:
+            return
+        try:
+            remaining = float(payload.get("action_hold_s", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            remaining = 0.0
+        if remaining != remaining or remaining < 0.0 or remaining == float("inf"):
+            remaining = 0.0
+        self._action_hold_s = remaining
+        try:
+            self._hold_reward_sum = float(payload.get("hold_reward_sum", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            self._hold_reward_sum = 0.0
+        try:
+            self._hold_reward_n = int(payload.get("hold_reward_n", 0) or 0)
+        except (TypeError, ValueError):
+            self._hold_reward_n = 0
+        started = payload.get("hold_started_at")
+        try:
+            self._hold_started_at = None if started is None else float(started)
+        except (TypeError, ValueError):
+            self._hold_started_at = None
+        raw = payload.get("hold_commit")
+        if isinstance(raw, dict):
+            decided = raw.get("decided")
+            affect = raw.get("affect")
+            self._hold_commit = {
+                "action": str(raw.get("action") or self.current_action or "idle"),
+                "decided": None if decided is None else str(decided),
+                "overridden": bool(raw.get("overridden")),
+                "source": raw.get("source"),
+                "context": [str(item) for item in list(raw.get("context") or [])],
+                "novelty": float(raw.get("novelty") or 0.0),
+                "conflict": float(raw.get("conflict") or 0.0),
+                "intensity": float(raw.get("intensity") or 1.0),
+                "affect": dict(affect) if isinstance(affect, dict) else None,
+            }
+        elif remaining > 0.0:
+            # Timer without a stashed episode: keep the action, commit a plain one later.
+            self._hold_commit = {
+                "action": str(self.current_action or "idle"),
+                "decided": str(self.current_action or "idle"),
+                "overridden": False,
+                "source": None,
+                "context": [],
+                "novelty": 0.0,
+                "conflict": 0.0,
+                "intensity": 1.0,
+                "affect": None,
+            }
+        if self._hold_commit is not None or self._action_hold_s > 0.0:
+            # The core pending context and host-dt flag are not in the save.
+            # A live closing commit already zeroed the affect interval and
+            # integrates neuromodulators with dt 0. Do the same after load,
+            # instead of the legacy 1 s step used when the flag is absent.
+            self._nm_use_host_dt = True
+            pending = getattr(self, "_pending_commit_context", None)
+            if not isinstance(pending, dict):
+                pending = {}
+                self._pending_commit_context = pending
+            pending["time_elapsed"] = 0.0
+            pending["step_elapsed"] = 0.0
+
     def sim_step(self, dt: float) -> None:
         self.sim_time += dt
+        self._sim_step_dt = float(dt)
+        self._exclusive_offer_this_tick = False
+        was_social = self.action_hold and self._exclusive_action_timer > 0.0
         self._tick_exclusive_action(dt)
         self._check_offer_timeout()
         # A need-bout yields once thirst or hunger enters the penalty band,
@@ -641,6 +1062,13 @@ class ChinchillaAgent(Agent):
         host_dt = _host_dt(dt)
         conflict = self._compute_conflict(host_dt)
         intensity = self._compute_intensity()
+        if self._maintain_action_hold(
+            dt,
+            host_dt,
+            context_events,
+            was_social=was_social,
+        ):
+            return
         # One game dt per tick. step() moves the host clock; the paired
         # commit omits dt so the same tick is not counted twice. Ticks that
         # do not call step() advance the clock explicitly.
@@ -704,8 +1132,9 @@ class ChinchillaAgent(Agent):
         commit_affect = None
         if asleep_affect:
             commit_affect = {axis: 0.0 for axis in self.affective_space.axes}
-        self.commit_executed_transition(
-            action=executed,
+        self._record_executed_action(
+            dt=dt,
+            executed=executed,
             reward=reward,
             context_events=context_events,
             decided_action=None if decided_action is None else str(decided_action),
@@ -714,7 +1143,7 @@ class ChinchillaAgent(Agent):
             novelty=novelty,
             conflict=conflict,
             intensity=intensity,
-            affective_inputs=commit_affect,
+            commit_affect=commit_affect,
         )
         self._resource_metabolism_step(dt)
         self._apply_unmet_need_cost(dt)
@@ -958,10 +1387,32 @@ class ChinchillaAgent(Agent):
             self._reflex_last_activation.clear()
             self._reflex_last_activation.update(cooldown_before)
             reflex_action, reflex_id = None, None
+        # Unmet thirst raises stress, and panic_hide would cancel the drink
+        # the penalty band is about to start. Alarm still hides.
+        served = self._penalty_service_action()
+        if (
+            served
+            and reflex_action in {"hide", "flee"}
+            and self._reflex_matched_only(reflex_id, events, frozenset({"high_stress"}))
+        ):
+            self._reflex_last_activation.clear()
+            self._reflex_last_activation.update(cooldown_before)
+            reflex_action, reflex_id = None, None
         if reflex_action is not None and reflex_action != action:
             action = reflex_action
             overridden = True
             source = f"reflex:{reflex_id}" if reflex_id else "reflex"
+        timed_out = self._travel_action if self._travel_timed_out() else None
+        if served and served != timed_out and action not in {"hide", "flee", "sleep"} and action != served:
+            # The band is already spending lethal energy. Holding the brain's
+            # other choice just to interrupt it next tick never reaches the bowl.
+            # A walk that just timed out is not restarted on this same tick,
+            # and sleep is not replaced.
+            action = served
+            overridden = True
+            source = f"homeostatic:penalty_{served}"
+        if served and served != timed_out and self._travel_action not in {None, served}:
+            self._clear_travel_goal()
         if self.physiology_as_policy:
             gated = action
         else:
@@ -997,6 +1448,43 @@ class ChinchillaAgent(Agent):
             if self._begin_travel(action):
                 return action, True, f"homeostatic:travel_{action}"
         return action, overridden, source
+
+    def _penalty_service_action(self) -> str | None:
+        """Drink or eat while a penalty band is open and the brain may act.
+
+        A replaced policy (the rest ablation) is left alone. Thirst spends
+        energy faster, so it wins when both bands are open. ``action_hold``
+        off keeps the per-tick body unchanged.
+        """
+        if not self.action_hold or not self.physiology_as_policy:
+            return None
+        if self.replaced_policy_action:
+            return None
+        hunger = _clamp(self.hunger, 0.0, 1.0)
+        thirst = _clamp(self.thirst, 0.0, 1.0)
+        threshold = float(self.action_hold_interrupt_threshold)
+        if thirst > threshold or thirst >= THIRST_NEED_THRESHOLD:
+            return "drink"
+        if hunger > threshold or hunger >= HUNGER_NEED_THRESHOLD:
+            return "eat"
+        return None
+
+    def _reflex_matched_only(
+        self,
+        reflex_id: str | None,
+        events: set[str],
+        only: frozenset[str],
+    ) -> bool:
+        if "alarm_call" in events:
+            return False
+        reflex = next(
+            (item for item in self.unconditioned_reflexes if item.reflex_id == reflex_id),
+            None,
+        )
+        if reflex is None:
+            return False
+        matched = (set(reflex.trigger_any) | set(reflex.trigger_all)) & set(events)
+        return matched == set(only)
 
     def _reflex_is_only_need_stress(
         self,
@@ -1971,6 +2459,29 @@ class ChinchillaAgent(Agent):
                     contagion[str(key)] = (sens, _coerce_finite(item[1], 0.0))
         self._fear_contagion = contagion
 
+    def _advance_affect_while_awake(self, host_dt: float) -> None:
+        """One awake affect interval. The deferred commit must not add another."""
+        pending = getattr(self, "_pending_commit_context", None)
+        if not isinstance(pending, dict):
+            pending = {}
+            self._pending_commit_context = pending
+        pending["time_elapsed"] = 0.0
+        pending["step_elapsed"] = 0.0
+        try:
+            elapsed = max(0.0, float(host_dt))
+        except (TypeError, ValueError):
+            elapsed = 0.0
+        if not math.isfinite(elapsed):
+            elapsed = 0.0
+        try:
+            wake = float(self.wakefulness.wakefulness)
+        except Exception:
+            wake = 0.0
+        try:
+            self.affective_space.advance(elapsed, wakefulness=wake, asleep=False)
+        except Exception:
+            pass
+
     def _advance_affect_while_asleep(self, host_dt: float) -> None:
         """One asleep affect interval for this tick.
 
@@ -2195,10 +2706,7 @@ class ChinchillaAgent(Agent):
         self._apply_social_effects(offer.offer_type, offer.from_id, initiator=False)
         self._record_interaction(offer.from_id, offer.offer_type, "other", "accepted", 0.03)
 
-        meta = SOCIAL_OFFER_TYPES.get(offer.offer_type)
-        if meta and meta.exclusive:
-            self.current_action = offer.offer_type
-            self._exclusive_action_timer = max(self._exclusive_action_timer, meta.duration)
+        self._begin_exclusive_offer(offer.offer_type)
 
         return SocialResponse(True, self.agent_id, "accepted")
 
@@ -2296,10 +2804,7 @@ class ChinchillaAgent(Agent):
 
         known._recompute_relationship()
 
-        meta = SOCIAL_OFFER_TYPES.get(offer_type)
-        if meta and meta.exclusive:
-            self.current_action = offer_type
-            self._exclusive_action_timer = max(self._exclusive_action_timer, meta.duration)
+        self._begin_exclusive_offer(offer_type)
 
     def _exchange_knowledge(self, other_agent: "ChinchillaAgent") -> None:
         for known_id, known in list(self.knowledge.items()):
@@ -2445,7 +2950,8 @@ class ChinchillaAgent(Agent):
         self._exclusive_action_timer -= dt
         if self._exclusive_action_timer <= 0.0:
             self._exclusive_action_timer = 0.0
-            self.current_action = "idle"
+            if not self.action_hold:
+                self.current_action = "idle"
 
     def _resource_metabolism_step(self, dt: float) -> None:
         if self.resources is None:

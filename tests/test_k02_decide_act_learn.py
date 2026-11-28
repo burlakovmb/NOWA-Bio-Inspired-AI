@@ -114,9 +114,13 @@ def test_colony_episode_follows_executed_outcome_not_pre_action_choice():
 
     with patch.object(Agent, "step", return_value="play"):
         agent.sim_step(0.1)
+        spent = 0.0
+        while not agent.hippocampus.experiences and spent < 120.0:
+            agent.sim_step(0.1)
+            spent += 0.1
 
-    assert agent.current_action == "eat"
     assert agent.hunger < 0.9
+    assert agent.hippocampus.experiences, "the eat bout did not commit"
     exp = agent.hippocampus.experiences[-1]
     assert _episode_action(exp) == "eat"
     assert bool(getattr(exp, "overridden", False)) is True
