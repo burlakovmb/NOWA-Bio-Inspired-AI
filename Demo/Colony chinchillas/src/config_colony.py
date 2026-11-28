@@ -28,6 +28,10 @@ RESOURCE_CONSUMPTION_MULTIPLIER: Final[float] = 2.0
 # soft policy input, and ignored needs spend energy. An agent can still set
 # physiology_as_policy False to keep the historical homeostatic gate.
 PHYSIOLOGY_AS_POLICY: Final[bool] = True
+# The body keeps the brain's action for a dataset duration (sim seconds).
+# False restores a new decision on every tick.
+ACTION_HOLD: Final[bool] = True
+ACTION_HOLD_INTERRUPT_THRESHOLD: Final[float] = 0.9
 UNMET_HUNGER_ENERGY_PER_S: Final[float] = 0.02
 UNMET_THIRST_ENERGY_PER_S: Final[float] = 0.025
 UNMET_SLEEP_ENERGY_PER_S: Final[float] = 0.02

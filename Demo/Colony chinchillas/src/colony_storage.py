@@ -213,6 +213,7 @@ class ColonyStorage:
                     key: _f(value) for key, value in dict(agent._offer_cooldowns).items()
                 },
                 "exclusive_action_timer": _f(agent._exclusive_action_timer),
+                "action_hold": agent.export_action_hold(),
                 "metabolism_tick": _f(agent._metabolism_tick),
                 "body_step_carry": _f(getattr(agent, "_body_step_carry", 0.0)),
                 "sleep_entered_by_need": bool(getattr(agent, "_sleep_entered_by_need", False)),
@@ -311,6 +312,10 @@ class ColonyStorage:
             for key, value in dict(runtime.get("offer_cooldowns", {})).items()
         }
         agent._exclusive_action_timer = _f(runtime.get("exclusive_action_timer", 0.0))
+        if "action_hold" in runtime:
+            agent.restore_action_hold(runtime.get("action_hold"))
+        else:
+            agent.restore_action_hold(None)
         agent._metabolism_tick = _f(runtime.get("metabolism_tick", 0.0))
         agent._body_step_carry = _f(runtime.get("body_step_carry", 0.0))
         agent._sleep_entered_by_need = bool(runtime.get("sleep_entered_by_need", False))

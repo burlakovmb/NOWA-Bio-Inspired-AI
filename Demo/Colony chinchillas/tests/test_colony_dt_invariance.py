@@ -81,8 +81,37 @@ def test_a_large_tick_splits_into_quarter_second_decisions() -> None:
     assert all(step <= SimulationRunner.MAX_TICK_DT + 1e-12 for step in calls)
 
 
+def _brain_decisions(duration_s: float, dt: float, *, agents: int = 1) -> int:
+    """How many times the core is asked. Holds make this much rarer than ticks."""
+    calls = {"n": 0}
+    had_own = "step" in ChinchillaAgent.__dict__
+    original = ChinchillaAgent.step
+
+    def wrapped(self: ChinchillaAgent, *args, **kwargs):
+        calls["n"] += 1
+        return original(self, *args, **kwargs)
+
+    state = random.getstate()
+    random.seed(1)
+    ChinchillaAgent.step = wrapped  # type: ignore[method-assign]
+    try:
+        runner = SimulationRunner(death_journal_path="/tmp/colony-dt-brain.jsonl", seed=1)
+        for index in range(agents):
+            runner.add_agent(
+                ChinchillaAgent(sex="F" if index % 2 == 0 else "M", rng_seed=index + 1)
+            )
+        runner.run_for(duration_s, dt=dt)
+    finally:
+        if had_own:
+            ChinchillaAgent.step = original  # type: ignore[method-assign]
+        else:
+            del ChinchillaAgent.step
+        random.setstate(state)
+    return calls["n"]
+
+
 def test_a_decision_rate_matches_at_1x_load_and_10x() -> None:
-    """Load-adapted 1x is one 0.25 s decision. 10x must take the same ones."""
+    """Sub-ticks still split at 0.25 s. Brain decisions are held and match across speeds."""
     duration_s = 5.0
     one_x = _decision_dts(duration_s, UI_DT_1X_LOAD)
     ten_x = _decision_dts(duration_s, UI_DT_10X)
@@ -91,6 +120,11 @@ def test_a_decision_rate_matches_at_1x_load_and_10x() -> None:
     assert max(ten_x) <= UI_DT_1X_LOAD + 1e-12
     assert abs(sum(one_x) - duration_s) < 1e-6
     assert abs(sum(ten_x) - duration_s) < 1e-6
+    brain_one = _brain_decisions(duration_s, UI_DT_1X_LOAD)
+    brain_ten = _brain_decisions(duration_s, UI_DT_10X)
+    tick_count = int(duration_s / UI_DT_1X_LOAD)
+    assert brain_one == brain_ten
+    assert 1 <= brain_one < tick_count
 
 
 def test_a_nominal_10x_does_not_collapse_to_one_decision() -> None:
@@ -443,7 +477,7 @@ def test_runner_old_age_matches_at_nominal_1x_and_10x() -> None:
     """UI frame at 1x is 1/12 s. A 10x frame is 2.5 s and is split.
 
     Death is the first substep whose biological age reaches the cap.
-    The two speeds take different decision counts for that same second.
+    Brain steps are held, so both speeds take the same decision count.
     """
 
     def run(frame_dt: float, tag: str) -> tuple[float, int, str]:
@@ -473,7 +507,7 @@ def test_runner_old_age_matches_at_nominal_1x_and_10x() -> None:
     assert abs(age_1x - COLONY_MAX_LIFESPAN_AGE_S) <= UI_DT_1X + 1e-6
     assert abs(age_10x - COLONY_MAX_LIFESPAN_AGE_S) <= SimulationRunner.MAX_TICK_DT + 1e-6
     assert abs(age_1x - age_10x) <= SimulationRunner.MAX_TICK_DT + 1e-6
-    assert steps_1x > steps_10x > 0
+    assert steps_1x == steps_10x > 0
 
 
 def _genome_with_lifespan_factor(factor: float) -> GenomeVector:
@@ -594,7 +628,7 @@ def test_lifespan_factor_runner_matches_at_nominal_1x_and_10x() -> None:
         assert abs(age_1x - cap) <= UI_DT_1X + 1e-6
         assert abs(age_10x - cap) <= SimulationRunner.MAX_TICK_DT + 1e-6
         assert abs(age_1x - age_10x) <= SimulationRunner.MAX_TICK_DT + 1e-6
-        assert steps_1x > steps_10x > 0
+        assert steps_1x == steps_10x > 0
         systems.extend((system_1x, system_10x))
     assert len({id(system) for system in systems}) == len(systems)
 

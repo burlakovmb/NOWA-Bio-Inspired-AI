@@ -66,6 +66,13 @@ def _install_script(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _last_source(agent: ChinchillaAgent) -> str | None:
+    """Episode source, or the bout that is still open under action hold."""
+    commit = getattr(agent, "_hold_commit", None)
+    if isinstance(commit, dict) and (
+        float(getattr(agent, "_action_hold_s", 0.0)) > 0.0
+        or float(getattr(agent, "_exclusive_action_timer", 0.0)) > 0.0
+    ):
+        return commit.get("source")
     experiences = agent.hippocampus.experiences
     assert experiences, "the tick did not commit an experience"
     return getattr(experiences[-1], "override_source", None)
@@ -95,8 +102,13 @@ def test_drink_from_floor_holds_across_socialize_and_play(
     assert _last_source(agent) == "homeostatic:travel_drink"
 
     agent.sim_step(1.25)
-    assert agent.resources.water == pytest.approx(1.0 - BITE)
-    assert _last_source(agent) != "homeostatic:travel_drink"
+    # Same drink bout: the brain is not asked again. Policy mode sips only
+    # while thirsty; the legacy body sips once per tick of the bout.
+    expected_bites = 1 if policy else 2
+    assert agent.resources.water == pytest.approx(1.0 - expected_bites * BITE)
+    assert agent._travel_action is None
+    assert agent._decision_script == ["socialize", "play"]
+    assert _last_source(agent) == "homeostatic:travel_drink"
 
 
 def test_eat_from_house_holds_until_the_bowl(monkeypatch: pytest.MonkeyPatch) -> None:

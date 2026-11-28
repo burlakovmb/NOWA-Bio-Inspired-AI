@@ -25,8 +25,9 @@ def test_tc02_first_meeting_of_strangers() -> None:
     runner.add_agent(a0)
     runner.add_agent(a1)
 
-    # The test checks the first meeting, not wandering.
-    for _ in range(10):
+    # The test checks the first meeting, not wandering. A held action
+    # occupies the first bout, so the greet lands after that bout.
+    for _ in range(60):
         a0._set_position("floor")
         a1._set_position("floor")
         runner.tick(1.0)
