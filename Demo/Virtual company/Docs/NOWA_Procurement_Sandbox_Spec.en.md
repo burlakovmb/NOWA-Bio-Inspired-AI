@@ -8,6 +8,10 @@ Fitness is a six-dimensional vector: cost efficiency, stockout avoidance, budget
 
 The document records the contracts of observation and write methods, a catalogue of edge cases, a requirement for a checkpoint after every quarter, and performance bounds: one `tick()` under 5 ms at the standard world size, a quarter under 30 s, a thirty-quarter run under 15 minutes, and memory for one agent after such a run under 200 MB. Transition to a real MCP connection is made to depend on graduation in at least three of five independent runs, with the spread in quarters-to-graduation no greater than ±50%. The sample command-line transcript in the launch section illustrates the report format and is not a recorded experimental outcome.
 
+### As-built note (issue #96)
+
+The live loop is `ScenarioTrainer` (`scenario_trainer.py`) driving a `Scenario` implementation. Procurement uses `ProcurementScenario`; `SandboxTrainer` (`training_loop.py`) is a backward-compatible facade with the same constructor as before v1.3. Shared helpers: `numeric_memory.py`, `stage_mechanics.py`. Optional YAML key `scenario:` (see `sandbox_config.py`) does not change CLI/GUI hosts. Full contracts, day order, golden gate, and a second-domain example: [issue-96-sandbox-scenario.en.md](../../../Docs/specs/issue-96-sandbox-scenario.en.md). Sections below that still say `training_loop` owns the generic loop describe behaviour now implemented via `ScenarioTrainer` + buyer plugin unless marked historical.
+
 ---
 
 # NOWA Procurement Sandbox — Technical Specification

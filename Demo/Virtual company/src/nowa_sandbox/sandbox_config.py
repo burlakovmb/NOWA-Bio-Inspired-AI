@@ -27,6 +27,7 @@ from .stage_baseline import (
     COST_VS_CHANCE_FLOOR_DELTA,
     clamp_cost_vs_chance_floor_delta,
 )
+from .stage_mechanics import merge_thresholds
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "default_world.yaml"
@@ -173,6 +174,17 @@ class OutputConfig:
 
 
 @dataclass
+class ScenarioConfig:
+    """Optional ``scenario:`` section. Absent means the buyer sandbox."""
+
+    name: str = "procurement"
+    value_field: str = "unit_price"
+    token_prefix: str = "price"
+    entity_prefix: str = "product"
+    consistency: Optional[ConsistencyConfig] = None
+
+
+@dataclass
 class SandboxConfig:
     world: ProcurementWorldConfig = field(default_factory=ProcurementWorldConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
@@ -182,11 +194,19 @@ class SandboxConfig:
     stage_baseline: StageBaselineConfig = field(default_factory=StageBaselineConfig)
     consistency: ConsistencyConfig = field(default_factory=lambda: DEFAULT_CONSISTENCY)
     output: OutputConfig = field(default_factory=OutputConfig)
+    # None when the file has no ``scenario:`` section. ``to_dict`` omits it
+    # then, so a default config round-trips with the same keys as before.
+    scenario: Optional[ScenarioConfig] = None
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping[str, Any]]) -> "SandboxConfig":
         data = dict(data or {})
         config = cls()
+        scenario_raw = data.get("scenario")
+        scenario_name = "procurement"
+        if isinstance(scenario_raw, Mapping):
+            scenario_name = str(scenario_raw.get("name") or "procurement").strip() or "procurement"
+        buyer = scenario_name == "procurement"
 
         world = dict(data.get("world") or {})
         defaults = ProcurementWorldConfig()
@@ -262,7 +282,11 @@ class SandboxConfig:
             stop_on_graduation=bool(training.get("stop_on_graduation", True)),
             seed=safe_int(training.get("seed", 42), 42),
             seed_intuition=bool(training.get("seed_intuition", True)),
-            stage=_valid_stage(training.get("stage", "1a")),
+            stage=(
+                _valid_stage(training.get("stage", "1a"))
+                if buyer
+                else (str(training.get("stage", "1a")).strip() or "1a")
+            ),
             supplier_set_count=safe_int(
                 training.get("supplier_set_count", defaults_training.supplier_set_count),
                 defaults_training.supplier_set_count,
@@ -299,13 +323,10 @@ class SandboxConfig:
             ),
         )
 
-        thresholds = dict(GRADUATION_THRESHOLDS)
-        for criterion, value in dict(data.get("graduation_thresholds") or {}).items():
-            if criterion in thresholds:
-                thresholds[criterion] = clamp(
-                    safe_float(value, thresholds[criterion]), 0.0, 1.0
-                )
-        config.graduation_thresholds = thresholds
+        config.graduation_thresholds = merge_thresholds(
+            data.get("graduation_thresholds"),
+            GRADUATION_THRESHOLDS if buyer else None,
+        )
 
         baseline_cfg = dict(data.get("stage_baseline") or {})
         config.stage_baseline = StageBaselineConfig(
@@ -319,6 +340,30 @@ class SandboxConfig:
 
         if data.get("consistency") is not None:
             config.consistency = _consistency_from_mapping(data["consistency"])
+
+        if isinstance(scenario_raw, Mapping):
+            memory = dict(scenario_raw.get("memory") or {})
+            if buyer:
+                value_default, token_default, entity_default = (
+                    "unit_price", "price", "product",
+                )
+            else:
+                value_default, token_default, entity_default = (
+                    "value", "level", "entity",
+                )
+            section_consistency = None
+            if scenario_raw.get("consistency") is not None:
+                section_consistency = _consistency_from_mapping(
+                    scenario_raw["consistency"]
+                )
+                config.consistency = section_consistency
+            config.scenario = ScenarioConfig(
+                name=scenario_name,
+                value_field=str(memory.get("value_field", value_default)),
+                token_prefix=str(memory.get("token_prefix", token_default)),
+                entity_prefix=str(memory.get("entity_prefix", entity_default)),
+                consistency=section_consistency,
+            )
 
         output = dict(data.get("output") or {})
         config.output = OutputConfig(
@@ -351,7 +396,7 @@ class SandboxConfig:
         return cls.from_yaml(path)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "world": {
                 "initial_budget": self.world.initial_budget,
                 "n_products": self.world.n_products,
@@ -402,10 +447,32 @@ class SandboxConfig:
                 "save_per_quarter_snapshots": self.output.save_per_quarter_snapshots,
             },
         }
+        if self.scenario is not None:
+            section: Dict[str, Any] = {
+                "name": self.scenario.name,
+                "memory": {
+                    "value_field": self.scenario.value_field,
+                    "token_prefix": self.scenario.token_prefix,
+                    "entity_prefix": self.scenario.entity_prefix,
+                },
+            }
+            if self.scenario.consistency is not None:
+                bound = self.scenario.consistency
+                section["consistency"] = {
+                    "entity_field": bound.entity_field,
+                    "choice_field": bound.choice_field,
+                    "attached_prefixes": list(bound.attached_prefixes),
+                    "counted_statuses": list(bound.counted_statuses),
+                    "min_decisions": bound.min_decisions,
+                    "neutral": bound.neutral,
+                }
+            payload["scenario"] = section
+        return payload
 
 
 __all__ = [
     "SandboxConfig",
+    "ScenarioConfig",
     "TrainingConfig",
     "StageBaselineConfig",
     "OutputConfig",

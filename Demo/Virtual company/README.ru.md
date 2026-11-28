@@ -4,6 +4,8 @@ English version: [README.en.md](README.en.md)
 
 Установка содержит песочницу закупок и протокольное тело с хостом сотрудников. Контуры не импортируют друг друга. Научное описание, инварианты, учебный план, лабораторные наблюдения и команды: [Docs/SCIENTIFIC_DESCRIPTION.ru.md](Docs/SCIENTIFIC_DESCRIPTION.ru.md). Описание комплекса: [Docs/SCIENTIFIC_DESCRIPTION.ru.md](../../Docs/SCIENTIFIC_DESCRIPTION.ru.md).
 
+Закупщик остаётся хостом по умолчанию. Обучение идёт через `SandboxTrainer` в `training_loop.py` — фасад над общим `ScenarioTrainer` и `ProcurementScenario`. CLI, GUI, учебный план и вкладка World без изменений и не читают необязательный `scenario.name` из YAML. Подключение другого симулированного домена: [Docs/specs/issue-96-sandbox-scenario.ru.md](../../Docs/specs/issue-96-sandbox-scenario.ru.md).
+
 Краткий запуск песочницы из каталога установки:
 
 ```bash

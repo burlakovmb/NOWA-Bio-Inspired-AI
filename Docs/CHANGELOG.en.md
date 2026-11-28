@@ -2,6 +2,29 @@
 
 Russian version: [CHANGELOG.ru.md](CHANGELOG.ru.md)
 
+## 2026-11-28 — Virtual company: domain-neutral sandbox scenario (issue #96)
+
+Developer-facing documentation for the `Scenario` / `ScenarioTrainer` layer and backward-compatible `SandboxTrainer` facade. Procurement CLI, GUI, and default YAML behaviour unchanged.
+
+Updated files:
+
+- `Docs/specs/issue-96-sandbox-scenario.en.md` (new)
+- `Docs/specs/issue-96-sandbox-scenario.ru.md` (new)
+- `Demo/Virtual company/README.en.md`, `README.ru.md`
+- `Demo/Virtual company/Docs/SCIENTIFIC_DESCRIPTION.en.md`, `SCIENTIFIC_DESCRIPTION.ru.md`
+- `Demo/Virtual company/Docs/NOWA_Procurement_Sandbox_Spec.en.md` (as-built note)
+
+Key points documented:
+
+- `Scenario` contract and day order in `ScenarioTrainer._run_single_quarter`
+- `NumericMemory`, `stage_mechanics` graduation helpers, optional YAML `scenario:`
+- Toy logistics reference under `tests/logistics_scenario.py`
+- Golden gate: `tools/golden_issue_96.py`, fixture regeneration, core-agent requirement
+
+QA evidence remains in `Docs/qa/issue-96-scenario.*.md` (not rewritten).
+
+---
+
 ## 2026-09-27 — Scientific exposition in two languages
 
 

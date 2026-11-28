@@ -151,6 +151,7 @@ def compute_stage_1a_baseline(
     quarters: Sequence[Any],
     method: str = "median_all",
     last_n: int = BASELINE_QUARTERS,
+    criteria: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Build a Stage 1a baseline payload.
 
@@ -170,12 +171,16 @@ def compute_stage_1a_baseline(
             f"unknown baseline method {method!r}; expected one of {BASELINE_METHODS}"
         )
 
+    names = list(STAGE_1A_CRITERIA if criteria is None else criteria)
     if method == "mean_best":
-        return _compute_mean_best(quarters, last_n=last_n)
-    return _compute_median_all(quarters)
+        return _compute_mean_best(quarters, last_n=last_n, criteria=names)
+    return _compute_median_all(quarters, criteria=names)
 
 
-def _compute_median_all(quarters: List[Any]) -> Dict[str, Any]:
+def _compute_median_all(
+    quarters: List[Any],
+    criteria: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     if len(quarters) < MIN_QUARTERS_FOR_BASELINE:
         raise ValueError(
             f"Only {len(quarters)} quarters available; need at least "
@@ -185,7 +190,8 @@ def _compute_median_all(quarters: List[Any]) -> Dict[str, Any]:
 
     baseline: Dict[str, float] = {}
     spread: Dict[str, float] = {}
-    for criterion in STAGE_1A_CRITERIA:
+    names = list(STAGE_1A_CRITERIA if criteria is None else criteria)
+    for criterion in names:
         values = [
             safe_float(_fitness_of(q).get(criterion), 0.0) for q in quarters
         ]
@@ -211,7 +217,11 @@ def _compute_median_all(quarters: List[Any]) -> Dict[str, Any]:
     return payload
 
 
-def _compute_mean_best(quarters: List[Any], last_n: int) -> Dict[str, Any]:
+def _compute_mean_best(
+    quarters: List[Any],
+    last_n: int,
+    criteria: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     """Legacy v1.1 cherry-pick — diagnostic comparison only (B1)."""
     good = successful_quarters(quarters)
     from_successful = bool(good)
@@ -219,7 +229,8 @@ def _compute_mean_best(quarters: List[Any], last_n: int) -> Dict[str, Any]:
 
     baseline: Dict[str, float] = {}
     spread: Dict[str, float] = {}
-    for criterion in STAGE_1A_CRITERIA:
+    names = list(STAGE_1A_CRITERIA if criteria is None else criteria)
+    for criterion in names:
         values = [
             safe_float(_fitness_of(q).get(criterion), 0.0) for q in selected
         ]
@@ -265,7 +276,10 @@ def save_baseline(
     return record
 
 
-def load_baseline_bundle(path: str) -> Dict[str, Any]:
+def load_baseline_bundle(
+    path: str,
+    criteria: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     """Load medians, IQR spread and metadata for the non-regression guard."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -281,23 +295,26 @@ def load_baseline_bundle(path: str) -> Dict[str, Any]:
                 f"stage1a_report.py --write-baseline on a run that "
                 f"actually graduated."
             )
-        payload = compute_stage_1a_baseline(data, method="median_all")
+        payload = compute_stage_1a_baseline(
+            data, method="median_all", criteria=criteria
+        )
         payload["source"] = path
         return payload
 
     if isinstance(data, Mapping):
         nested = data.get("stage_1a_baseline")
         source = nested if isinstance(nested, Mapping) else data
+        names = list(STAGE_1A_CRITERIA if criteria is None else criteria)
         baseline = {
             criterion: safe_float(source.get(criterion), 0.0)
-            for criterion in STAGE_1A_CRITERIA
+            for criterion in names
             if criterion in source
         }
         if baseline:
             spread_raw = data.get("stage_1a_spread_iqr") or {}
             spread = {
                 criterion: safe_float(spread_raw.get(criterion), 0.0)
-                for criterion in STAGE_1A_CRITERIA
+                for criterion in names
                 if criterion in baseline
             }
             bundle = {

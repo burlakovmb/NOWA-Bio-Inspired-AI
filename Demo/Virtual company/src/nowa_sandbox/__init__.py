@@ -39,6 +39,7 @@ from .sandbox_checkpoint import (
 )
 from .sandbox_config import SandboxConfig
 from .sandbox_encoder import AFFECTIVE_MAPPING, SandboxEncoder, classify_world_events
+from .scenario import Call, Observation, Outcome, Scenario
 from .sandbox_observer import SandboxObserver
 from .stage_baseline import (
     MIN_QUARTERS_FOR_BASELINE,
@@ -77,6 +78,10 @@ __all__ = [
     "SandboxConfig",
     "SandboxEncoder",
     "SandboxObserver",
+    "Call",
+    "Observation",
+    "Outcome",
+    "Scenario",
     "SandboxTrainer",
     "SandboxTrainingResult",
     "VirtualProduct",
